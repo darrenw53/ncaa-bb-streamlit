@@ -1,0 +1,1014 @@
+﻿import io
+import re
+import difflib
+import numpy as np
+import pandas as pd
+import streamlit as st
+
+# -----------------------------
+# Constants (match your sheet)
+# -----------------------------
+AVG_EFF = 102.0
+AVG_TEMPO = 64.8
+
+
+# -----------------------------
+# Trapezoid / Fraud tagging
+# -----------------------------
+# Trapezoid polygon (pace x net rating) tuned to mirror your reference chart.
+# Points: (64,26) -> (66,38) -> (73,38) -> (75,26)
+TRAP_POLY_X = [64.0, 66.0, 73.0, 75.0]
+TRAP_POLY_Y = [26.0, 38.0, 38.0, 26.0]
+
+# Fraud zone heuristic (does NOT affect any calculations; only tagging)
+FRAUD_PACE_MIN = 71.0
+FRAUD_NET_MAX = 26.0
+
+
+def point_in_polygon(px: float, py: float, poly_x: list[float], poly_y: list[float]) -> bool:
+    """Ray-casting point-in-polygon. Works for convex/non-convex polygons."""
+    inside = False
+    j = len(poly_x) - 1
+    for i in range(len(poly_x)):
+        xi, yi = poly_x[i], poly_y[i]
+        xj, yj = poly_x[j], poly_y[j]
+        intersects = ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi + 1e-12) + xi)
+        if intersects:
+            inside = not inside
+        j = i
+    return inside
+
+
+def tag_team_style(adjT: float, net: float) -> tuple[bool, bool, str]:
+    """Returns (in_trapezoid, is_fraud, tag_string)."""
+    if adjT is None or net is None or np.isnan(adjT) or np.isnan(net):
+        return False, False, ""
+    in_trap = point_in_polygon(float(adjT), float(net), TRAP_POLY_X, TRAP_POLY_Y)
+    is_fraud = (float(adjT) >= FRAUD_PACE_MIN) and (float(net) < FRAUD_NET_MAX) and (not in_trap)
+    tag = "🏆 TRAP" if in_trap else ("🚨 FRAUD" if is_fraud else "")
+    return in_trap, is_fraud, tag
+
+
+# =============================
+# Share-card helpers (HTML)
+# =============================
+def fmt_num(x, nd=1):
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return ""
+    try:
+        return f"{float(x):.{nd}f}"
+    except Exception:
+        return ""
+
+
+def pick_side_from_edge(edge_spread):
+    # Edge_Spread = Model(Home_Margin) + Spread_Home
+    if edge_spread is None or (isinstance(edge_spread, float) and np.isnan(edge_spread)):
+        return ""
+    return "HOME" if edge_spread > 0 else "VISITOR"
+
+
+def pick_total_from_edge(edge_total):
+    # Edge_Total = Model_Total - Vegas_Total
+    if edge_total is None or (isinstance(edge_total, float) and np.isnan(edge_total)):
+        return ""
+    return "OVER" if edge_total > 0 else "UNDER"
+
+
+def confidence_label(edge_abs):
+    if edge_abs >= 6:
+        return "🔥 Strong"
+    if edge_abs >= 4:
+        return "✅ Solid"
+    if edge_abs >= 2:
+        return "👍 Lean"
+    return "—"
+
+
+def build_share_card_html(spread_df, total_df, title, subtitle):
+    """
+    Renders a branded, shareable HTML card.
+    """
+    def safe_get(r, key):
+        return r[key] if key in r else np.nan
+
+    def table_html(df, kind):
+        if df is None or len(df) == 0:
+            return f"<div class='empty'>No {kind} plays today.</div>"
+
+        rows = []
+        for _, r in df.iterrows():
+            vtag = safe_get(r,'Visitor_Tag')
+            htag = safe_get(r,'Home_Tag')
+            tag_txt = ""
+            if isinstance(vtag, str) and vtag.strip():
+                tag_txt += f" {vtag.strip()}"
+            if isinstance(htag, str) and htag.strip():
+                tag_txt += f" / {htag.strip()}" if tag_txt else f" {htag.strip()}"
+            matchup = f"{safe_get(r,'Visitor')} @ {safe_get(r,'Home')}" + (f" <span style='opacity:0.8;font-weight:700'>[{tag_txt.strip()}]</span>" if tag_txt else "")
+            score = f"{fmt_num(safe_get(r,'Pred_Away'))} - {fmt_num(safe_get(r,'Pred_Home'))}"
+
+            if kind == "spread":
+                vegas = fmt_num(safe_get(r, "Spread_Home"), 1)
+                edge = safe_get(r, "Edge_Spread")
+                edge_txt = fmt_num(edge, 2)
+                side = pick_side_from_edge(edge)
+                conf = confidence_label(abs(edge) if pd.notna(edge) else 0)
+                rows.append(
+                    f"<tr>"
+                    f"<td class='col-match'>{matchup}</td>"
+                    f"<td class='col-score'>{score}</td>"
+                    f"<td class='col-vegas'>{vegas}</td>"
+                    f"<td class='col-edge'>{edge_txt}</td>"
+                    f"<td class='col-pick'>{side}</td>"
+                    f"<td class='col-conf'>{conf}</td>"
+                    f"</tr>"
+                )
+            else:
+                vegas = fmt_num(safe_get(r, "DK_Total"), 1)
+                edge = safe_get(r, "Edge_Total")
+                edge_txt = fmt_num(edge, 2)
+                side = pick_total_from_edge(edge)
+                conf = confidence_label(abs(edge) if pd.notna(edge) else 0)
+                rows.append(
+                    f"<tr>"
+                    f"<td class='col-match'>{matchup}</td>"
+                    f"<td class='col-score'>{score}</td>"
+                    f"<td class='col-vegas'>{vegas}</td>"
+                    f"<td class='col-edge'>{edge_txt}</td>"
+                    f"<td class='col-pick'>{side}</td>"
+                    f"<td class='col-conf'>{conf}</td>"
+                    f"</tr>"
+                )
+
+        header = (
+            "<tr>"
+            "<th>Matchup</th><th>Model Score</th><th>Vegas</th><th>Edge</th><th>Pick</th><th>Confidence</th>"
+            "</tr>"
+        )
+        return f"<table>{header}{''.join(rows)}</table>"
+
+    # Branded banner text
+    brand_line = "DW’s Master Lock Picks of The Day"
+    brand_tag = "NCAA • Model Edges • Daily Card"
+
+    html = f"""
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body {{
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+          padding: 24px;
+          background: #ffffff;
+        }}
+
+        .card {{
+          max-width: 980px;
+          margin: 0 auto;
+          border: 1px solid #e6e6e6;
+          border-radius: 18px;
+          overflow: hidden;
+          box-shadow: 0 10px 28px rgba(0,0,0,0.06);
+          background: #fff;
+        }}
+
+        /* Flashy hero banner */
+        .hero {{
+          position: relative;
+          padding: 22px 22px 18px 22px;
+          background: radial-gradient(1200px circle at 10% 20%, rgba(255,255,255,0.35), rgba(255,255,255,0) 40%),
+                      linear-gradient(135deg, #0f172a 0%, #111827 35%, #1f2937 100%);
+          color: #fff;
+        }}
+        .hero:before {{
+          content: "";
+          position: absolute;
+          inset: -2px;
+          background: linear-gradient(90deg, rgba(56,189,248,0.35), rgba(168,85,247,0.35), rgba(34,197,94,0.35));
+          filter: blur(22px);
+          opacity: 0.55;
+          z-index: 0;
+        }}
+        .hero-inner {{
+          position: relative;
+          z-index: 1;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          flex-wrap: wrap;
+        }}
+        .hero-left {{
+          display: flex;
+          align-items: center;
+          gap: 14px;
+          min-width: 260px;
+        }}
+        .lock-badge {{
+          width: 46px;
+          height: 46px;
+          border-radius: 14px;
+          display: grid;
+          place-items: center;
+          background: rgba(255,255,255,0.10);
+          border: 1px solid rgba(255,255,255,0.20);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
+          font-size: 22px;
+        }}
+        .hero-title {{
+          margin: 0;
+          font-size: 24px;
+          font-weight: 900;
+          letter-spacing: -0.4px;
+          line-height: 1.05;
+        }}
+        .hero-tag {{
+          margin: 6px 0 0 0;
+          font-size: 12px;
+          color: rgba(255,255,255,0.80);
+          font-weight: 700;
+          letter-spacing: 0.2px;
+        }}
+        .hero-right {{
+          text-align: right;
+          min-width: 240px;
+        }}
+        .pill {{
+          display: inline-block;
+          padding: 6px 12px;
+          border-radius: 999px;
+          background: rgba(255,255,255,0.10);
+          border: 1px solid rgba(255,255,255,0.18);
+          font-size: 12px;
+          font-weight: 800;
+          margin-left: 8px;
+        }}
+        .subtitle {{
+          margin: 10px 0 0 0;
+          color: rgba(255,255,255,0.78);
+          font-size: 12.5px;
+          line-height: 1.35;
+          max-width: 520px;
+          margin-left: auto;
+        }}
+
+        /* Inner content */
+        .content {{
+          padding: 18px 22px 18px 22px;
+        }}
+        .section {{
+          margin-top: 18px;
+        }}
+        .section h2 {{
+          font-size: 18px;
+          margin: 0 0 10px 0;
+          letter-spacing: -0.2px;
+        }}
+
+        table {{
+          width: 100%;
+          border-collapse: collapse;
+          overflow: hidden;
+          border-radius: 14px;
+        }}
+        th, td {{
+          padding: 10px 10px;
+          border-bottom: 1px solid #eee;
+          font-size: 14px;
+          vertical-align: top;
+        }}
+        th {{
+          text-align: left;
+          background: #fafafa;
+          font-weight: 900;
+          font-size: 12.5px;
+        }}
+        tr:hover td {{
+          background: #fcfcfc;
+        }}
+        .empty {{
+          padding: 12px;
+          color: #666;
+          border: 1px dashed #ddd;
+          border-radius: 14px;
+        }}
+        .footer {{
+          margin-top: 16px;
+          font-size: 12px;
+          color: #777;
+          line-height: 1.35;
+        }}
+
+        .col-match {{ width: 34%; font-weight: 800; }}
+        .col-score {{ width: 16%; }}
+        .col-vegas {{ width: 12%; }}
+        .col-edge {{ width: 12%; font-weight: 900; }}
+        .col-pick {{ width: 12%; font-weight: 900; }}
+        .col-conf {{ width: 14%; }}
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="hero">
+          <div class="hero-inner">
+            <div class="hero-left">
+              <div class="lock-badge">🔒</div>
+              <div>
+                <p class="hero-title">{brand_line}</p>
+                <p class="hero-tag">{brand_tag}</p>
+              </div>
+            </div>
+
+            <div class="hero-right">
+              <span class="pill">{title}</span>
+              <span class="pill">Subscriber Card</span>
+              <p class="subtitle">{subtitle}</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="content">
+          <div class="section">
+            <h2>Spread Plays</h2>
+            {table_html(spread_df, "spread")}
+          </div>
+
+          <div class="section">
+            <h2>Total Plays</h2>
+            {table_html(total_df, "total")}
+          </div>
+
+          <div class="footer">
+            <div><b>Notes:</b> Edges are model vs DraftKings lines/totals.</div>
+            <div>Entertainment only. If odds are missing or teams don’t map cleanly, plays may not appear.</div>
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+    return html
+
+
+# -----------------------------
+# Robust weekly KenPom loader
+# -----------------------------
+def load_kenpom_excel(uploaded_file: io.BytesIO) -> pd.DataFrame:
+    raw = pd.read_excel(uploaded_file, header=None)
+
+    header_row_idx = None
+    scan_rows = min(20, len(raw))
+    for i in range(scan_rows):
+        row = raw.iloc[i].astype(str).str.strip().tolist()
+        has_stats = ("ORtg" in row) and ("DRtg" in row) and ("AdjT" in row)
+        has_teamish = any(("team" in c.lower()) or ("school" in c.lower()) for c in row)
+        if has_stats and has_teamish:
+            header_row_idx = i
+            break
+
+    if header_row_idx is None:
+        preview = raw.head(6).astype(str).values.tolist()
+        raise ValueError(
+            "Could not find a header row containing Team/School + ORtg/DRtg/AdjT. "
+            f"Top rows preview: {preview}"
+        )
+
+    df = pd.read_excel(uploaded_file, header=header_row_idx)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    team_col_candidates = [
+        c for c in df.columns
+        if c.lower() in ["team", "teamname", "school", "team name", "team_name"]
+        or "team" in c.lower()
+        or "school" in c.lower()
+    ]
+    if not team_col_candidates:
+        raise ValueError(f"No team column found. Columns detected: {df.columns.tolist()}")
+
+    team_col = team_col_candidates[0]
+
+    for col in ["ORtg", "DRtg", "AdjT"]:
+        if col not in df.columns:
+            raise ValueError(f"Expected column '{col}' not found. Found: {df.columns.tolist()}")
+
+    out = pd.DataFrame({
+        "Team": df[team_col].astype(str).str.strip(),
+        "ORtg": pd.to_numeric(df["ORtg"], errors="coerce"),
+        "DRtg": pd.to_numeric(df["DRtg"], errors="coerce"),
+        "AdjT": pd.to_numeric(df["AdjT"], errors="coerce"),
+    })
+
+    # Derived metrics (tagging only; does NOT alter predictions)
+    out["NetRtg"] = out["ORtg"] - out["DRtg"]
+    tags = out.apply(lambda r: tag_team_style(r["AdjT"], r["NetRtg"]), axis=1)
+    out["In_Trapezoid"] = [t[0] for t in tags]
+    out["Fraud"] = [t[1] for t in tags]
+    out["Style_Tag"] = [t[2] for t in tags]
+
+    out = out.dropna(subset=["Team", "ORtg", "DRtg", "AdjT"])
+    out = out[out["Team"] != ""].drop_duplicates(subset=["Team"]).reset_index(drop=True)
+
+    return out
+
+
+# -----------------------------
+# Schedule loader
+# -----------------------------
+def load_schedule_excel(uploaded_file: io.BytesIO) -> pd.DataFrame:
+    df = pd.read_excel(uploaded_file)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    col_map = {c.lower(): c for c in df.columns}
+    visitor_col = None
+    home_col = None
+
+    for key in ["visitor", "away", "visiting", "road"]:
+        if key in col_map:
+            visitor_col = col_map[key]
+            break
+    for key in ["home", "hometeam", "home team"]:
+        if key in col_map:
+            home_col = col_map[key]
+            break
+
+    if visitor_col is None:
+        for c in df.columns:
+            if "visitor" in c.lower() or "away" in c.lower():
+                visitor_col = c
+                break
+    if home_col is None:
+        for c in df.columns:
+            if "home" in c.lower():
+                home_col = c
+                break
+
+    if visitor_col is None or home_col is None:
+        raise ValueError(
+            f"Schedule file must contain Visitor/Away and Home columns. Found: {df.columns.tolist()}"
+        )
+
+    df = df.rename(columns={visitor_col: "Visitor", home_col: "Home"})
+    df["Visitor"] = df["Visitor"].astype(str).str.strip()
+    df["Home"] = df["Home"].astype(str).str.strip()
+
+    df = df.dropna(subset=["Visitor", "Home"])
+    df = df[(df["Visitor"] != "") & (df["Home"] != "")]
+    df = df.reset_index(drop=True)
+
+    return df
+
+
+# -----------------------------
+# Team mapping (Schedule -> KenPom)
+# -----------------------------
+ALIAS_MAP = {
+    "american university": "American",
+    "app state": "Appalachian St.",
+    "siu edwardsville": "SIUE",
+    "ut martin": "Tennessee Martin",
+    "long beach state": "Long Beach St.",
+    "delaware state": "Delaware St.",
+    "georgia state": "Georgia St.",
+    "idaho state": "Idaho St.",
+    "illinois state": "Illinois St.",
+    "indiana state": "Indiana St.",
+    "jackson state": "Jackson St.",
+    "murray state": "Murray St.",
+    "norfolk state": "Norfolk St.",
+    "oklahoma state": "Oklahoma St.",
+    "tennessee state": "Tennessee St.",
+    "southeast missouri state": "Southeast Missouri",
+    "cal state bakersfield": "Cal St. Bakersfield",
+}
+STOPWORDS = {"university", "college", "the", "at", "of"}
+
+
+def normalize_team_name(name: str) -> str:
+    s = str(name).strip().lower()
+    s = s.replace("&", " and ")
+    s = re.sub(r"\bst\.\b", "st", s)
+    s = re.sub(r"\bst\b", "state", s)
+    s = re.sub(r"[^a-z0-9 ]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    parts = [p for p in s.split() if p not in STOPWORDS]
+    return " ".join(parts)
+
+
+def build_kp_lookup(df_kp: pd.DataFrame):
+    kp_teams = df_kp["Team"].astype(str).str.strip().tolist()
+    kp_set = set(kp_teams)
+    norm_to_team = {}
+    for t in kp_teams:
+        k = normalize_team_name(t)
+        norm_to_team.setdefault(k, t)
+    return kp_teams, kp_set, norm_to_team
+
+
+def map_to_kenpom(team_name: str, kp_set: set[str], norm_to_team: dict, fuzzy_cutoff: float = 0.86):
+    """
+    Returns: (mapped_name or None, score 0..1, method)
+    """
+    original = str(team_name).strip()
+    if not original or original.lower() == "nan":
+        return None, 0.0, "empty"
+
+    # exact
+    if original in kp_set:
+        return original, 1.0, "exact"
+
+    # alias
+    alias_key = original.lower()
+    if alias_key in ALIAS_MAP and ALIAS_MAP[alias_key] in kp_set:
+        return ALIAS_MAP[alias_key], 1.0, "alias"
+
+    # normalized exact
+    n = normalize_team_name(original)
+    if n in norm_to_team:
+        return norm_to_team[n], 0.98, "normalized"
+
+    # fuzzy on normalized keys
+    norm_keys = list(norm_to_team.keys())
+    best = difflib.get_close_matches(n, norm_keys, n=1, cutoff=fuzzy_cutoff)
+    if best:
+        best_key = best[0]
+        score = difflib.SequenceMatcher(None, n, best_key).ratio()
+        return norm_to_team[best_key], float(score), "fuzzy"
+
+    return None, 0.0, "unmatched"
+
+
+# -----------------------------
+# Odds parsing helpers
+# -----------------------------
+def build_team_abbrev_candidates(team_name: str) -> set[str]:
+    name = str(team_name).strip().upper()
+    words = re.findall(r"[A-Z0-9]+", name)
+    joined = "".join(words)
+
+    cands = set()
+    if joined:
+        cands.update([joined, joined[:3], joined[:4], joined[:5]])
+
+    if words:
+        initials = "".join(w[0] for w in words if w)
+        if initials:
+            cands.update([initials, initials[:3], initials[:4]])
+
+    if len(words) >= 2:
+        two_each = "".join(w[:2] for w in words if len(w) >= 2)
+        if two_each:
+            cands.update([two_each, two_each[:3], two_each[:4], two_each[:5]])
+        three_each = "".join(w[:3] for w in words if len(w) >= 3)
+        if three_each:
+            cands.update([three_each, three_each[:3], three_each[:4], three_each[:5]])
+
+    if words:
+        cands.update([words[0][:3], words[0][:4], words[0][:5]])
+
+    return {c for c in cands if c and c != "NAN"}
+
+
+def parse_dk_odds(odds_text) -> dict:
+    if odds_text is None or (isinstance(odds_text, float) and np.isnan(odds_text)):
+        return {"DK_Fav": np.nan, "DK_Line_Fav": np.nan, "DK_Total": np.nan}
+
+    s = str(odds_text).strip()
+    if not s or s.lower() == "nan":
+        return {"DK_Fav": np.nan, "DK_Line_Fav": np.nan, "DK_Total": np.nan}
+
+    m_line = re.search(r"Line:\s*([A-Za-z0-9]+)\s*([+\-]?\d+(\.\d+)?)", s)
+    fav, line = np.nan, np.nan
+    if m_line:
+        fav = m_line.group(1).upper().strip()
+        line = float(m_line.group(2))
+
+    m_ou = re.search(r"O\/U[:\s]*([+\-]?\d+(\.\d+)?)", s)
+    total = np.nan
+    if m_ou:
+        total = float(m_ou.group(1))
+
+    return {"DK_Fav": fav, "DK_Line_Fav": line, "DK_Total": total}
+
+
+def derive_home_spread(visitor: str, home: str, dk_fav: str, dk_line_fav: float) -> float:
+    if dk_fav is None or (isinstance(dk_fav, float) and np.isnan(dk_fav)):
+        return np.nan
+    if dk_line_fav is None or (isinstance(dk_line_fav, float) and np.isnan(dk_line_fav)):
+        return np.nan
+
+    fav = str(dk_fav).upper().strip()
+    home_cands = build_team_abbrev_candidates(home)
+    away_cands = build_team_abbrev_candidates(visitor)
+
+    fav_is_home = fav in home_cands
+    fav_is_away = fav in away_cands
+
+    if fav_is_home and not fav_is_away:
+        return float(dk_line_fav)
+    if fav_is_away and not fav_is_home:
+        return float(-dk_line_fav)
+
+    return np.nan
+
+
+# -----------------------------
+# Core prediction logic (spreadsheet structure)
+# -----------------------------
+def predict_matchup(
+    team_away: str,
+    team_home: str,
+    df_kp: pd.DataFrame,
+    home_edge_points: float = 0.0,
+    off_scale: float = 1.0,
+    def_scale: float = 1.0,
+    tempo_scale: float = 1.0,
+):
+    away_row = df_kp.loc[df_kp["Team"] == team_away].iloc[0]
+    home_row = df_kp.loc[df_kp["Team"] == team_home].iloc[0]
+
+    OR_away = away_row["ORtg"] * off_scale
+    DR_away = away_row["DRtg"] * def_scale
+    T_away = away_row["AdjT"] * tempo_scale
+
+    OR_home = home_row["ORtg"] * off_scale
+    DR_home = home_row["DRtg"] * def_scale
+    T_home = home_row["AdjT"] * tempo_scale
+
+    possessions = (T_away * T_home) / AVG_TEMPO
+
+    away_pts_neutral = (OR_away / AVG_EFF) * (DR_home / AVG_EFF) * AVG_EFF * (possessions / 100.0)
+    home_pts_neutral = (OR_home / AVG_EFF) * (DR_away / AVG_EFF) * AVG_EFF * (possessions / 100.0)
+
+    away_pts = away_pts_neutral
+    home_pts = home_pts_neutral + home_edge_points
+
+    margin_home = home_pts - away_pts
+    total_pts = home_pts + away_pts
+
+    return {
+        "Away": team_away,
+        "Home": team_home,
+        "Possessions": float(np.round(possessions, 1)),
+        "Pred_Away": float(np.round(away_pts, 1)),
+        "Pred_Home": float(np.round(home_pts, 1)),
+        "Home_Margin": float(np.round(margin_home, 1)),
+        "Total": float(np.round(total_pts, 1)),
+    }
+
+
+def run_schedule(
+    schedule_df: pd.DataFrame,
+    df_kp: pd.DataFrame,
+    home_edge_points: float,
+    off_scale: float,
+    def_scale: float,
+    tempo_scale: float,
+    spread_edge_threshold: float,
+    total_edge_threshold: float,
+    fuzzy_cutoff: float,
+):
+    kp_teams, kp_set, norm_to_team = build_kp_lookup(df_kp)
+
+    results_rows = []
+    for _, r in schedule_df.iterrows():
+        visitor_raw = r["Visitor"]
+        home_raw = r["Home"]
+        base = r.to_dict()
+
+        # --- Map schedule team names to KenPom team names ---
+        v_map, v_score, v_method = map_to_kenpom(visitor_raw, kp_set, norm_to_team, fuzzy_cutoff=fuzzy_cutoff)
+        h_map, h_score, h_method = map_to_kenpom(home_raw, kp_set, norm_to_team, fuzzy_cutoff=fuzzy_cutoff)
+
+        base["Visitor_Mapped"] = v_map if v_map else ""
+        base["Home_Mapped"] = h_map if h_map else ""
+        base["Visitor_MapScore"] = float(np.round(v_score, 3))
+        base["Home_MapScore"] = float(np.round(h_score, 3))
+        base["Visitor_MapMethod"] = v_method
+        base["Home_MapMethod"] = h_method
+
+        # Parse odds regardless (so unmapped rows still show vegas)
+        odds_text = base.get("Odds by draft kings", np.nan)
+        dk = parse_dk_odds(odds_text)
+        base.update(dk)
+        base["Spread_Home"] = derive_home_spread(visitor_raw, home_raw, dk.get("DK_Fav"), dk.get("DK_Line_Fav"))
+
+        if not v_map or not h_map:
+            base.update({
+                "Possessions": np.nan,
+                "Pred_Away": np.nan,
+                "Pred_Home": np.nan,
+                "Home_Margin": np.nan,
+                "Total": np.nan,
+                "Edge_Spread": np.nan,
+                "Edge_Total": np.nan,
+                "Spread_Play": False,
+                "Total_Play": False,
+                "Visitor_NetRtg": np.nan,
+                "Home_NetRtg": np.nan,
+                "Visitor_InTrapezoid": False,
+                "Home_InTrapezoid": False,
+                "Visitor_Fraud": False,
+                "Home_Fraud": False,
+                "Visitor_Tag": "",
+                "Home_Tag": "",
+                "Map_Status": "UNMAPPED (needs alias/manual fix)"
+            })
+            results_rows.append(base)
+            continue
+
+        base["Map_Status"] = "OK"
+
+        # --- Style tags (no impact on calculations) ---
+        try:
+            v_style = df_kp.loc[df_kp["Team"] == v_map, ["NetRtg", "AdjT", "In_Trapezoid", "Fraud", "Style_Tag"]].iloc[0]
+            h_style = df_kp.loc[df_kp["Team"] == h_map, ["NetRtg", "AdjT", "In_Trapezoid", "Fraud", "Style_Tag"]].iloc[0]
+            base["Visitor_NetRtg"] = float(np.round(v_style["NetRtg"], 2))
+            base["Home_NetRtg"] = float(np.round(h_style["NetRtg"], 2))
+            base["Visitor_InTrapezoid"] = bool(v_style["In_Trapezoid"])
+            base["Home_InTrapezoid"] = bool(h_style["In_Trapezoid"])
+            base["Visitor_Fraud"] = bool(v_style["Fraud"])
+            base["Home_Fraud"] = bool(h_style["Fraud"])
+            base["Visitor_Tag"] = str(v_style["Style_Tag"])
+            base["Home_Tag"] = str(h_style["Style_Tag"])
+        except Exception:
+            base["Visitor_NetRtg"] = np.nan
+            base["Home_NetRtg"] = np.nan
+            base["Visitor_InTrapezoid"] = False
+            base["Home_InTrapezoid"] = False
+            base["Visitor_Fraud"] = False
+            base["Home_Fraud"] = False
+            base["Visitor_Tag"] = ""
+            base["Home_Tag"] = ""
+
+        # --- Predict using mapped names ---
+        pred = predict_matchup(
+            team_away=v_map,
+            team_home=h_map,
+            df_kp=df_kp,
+            home_edge_points=home_edge_points,
+            off_scale=off_scale,
+            def_scale=def_scale,
+            tempo_scale=tempo_scale,
+        )
+        base.update(pred)
+
+        # Edge_Spread = Model(Home_Margin) + Spread_Home
+        if isinstance(base.get("Spread_Home"), (int, float)) and not np.isnan(base["Spread_Home"]):
+            base["Edge_Spread"] = float(np.round(base["Home_Margin"] + base["Spread_Home"], 2))
+        else:
+            base["Edge_Spread"] = np.nan
+
+        # Edge_Total = Model(Total) - Vegas(O/U)
+        if isinstance(base.get("DK_Total"), (int, float)) and not np.isnan(base["DK_Total"]):
+            base["Edge_Total"] = float(np.round(base["Total"] - base["DK_Total"], 2))
+        else:
+            base["Edge_Total"] = np.nan
+
+        base["Spread_Play"] = bool(
+            isinstance(base.get("Edge_Spread"), (int, float)) and not np.isnan(base["Edge_Spread"])
+            and abs(base["Edge_Spread"]) >= spread_edge_threshold
+        )
+        base["Total_Play"] = bool(
+            isinstance(base.get("Edge_Total"), (int, float)) and not np.isnan(base["Edge_Total"])
+            and abs(base["Edge_Total"]) >= total_edge_threshold
+        )
+
+        results_rows.append(base)
+
+    results_df = pd.DataFrame(results_rows)
+
+    preferred = [
+        "Visitor", "Home", "Visitor_Tag", "Home_Tag", "Visitor_NetRtg", "Home_NetRtg",
+        "Visitor_InTrapezoid", "Home_InTrapezoid", "Visitor_Fraud", "Home_Fraud",
+        "Visitor_Mapped", "Home_Mapped", "Visitor_MapScore", "Home_MapScore",
+        "Visitor_MapMethod", "Home_MapMethod", "Map_Status",
+        "TIME", "TV", "location",
+        "DK_Fav", "DK_Line_Fav", "Spread_Home", "DK_Total",
+        "Pred_Away", "Pred_Home", "Home_Margin", "Total",
+        "Edge_Spread", "Edge_Total", "Spread_Play", "Total_Play",
+        "Odds by draft kings",
+    ]
+    cols = [c for c in preferred if c in results_df.columns] + [c for c in results_df.columns if c not in preferred]
+    return results_df[cols]
+
+
+# -----------------------------
+# Streamlit App
+# -----------------------------
+def main():
+    st.set_page_config(page_title="KenPom Matchup Predictor", layout="wide")
+    st.title("KenPom Matchup Predictor")
+
+    st.sidebar.header("Upload + Controls")
+
+    kp_uploaded = st.sidebar.file_uploader(
+        "1) Upload KenPom Excel (.xlsx)",
+        type=["xlsx", "xls"],
+        accept_multiple_files=False,
+        key="kp_upload",
+    )
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Adjustments")
+    home_edge_points = st.sidebar.slider("Home edge (pts added to HOME score)", -10.0, 10.0, 3.0, 0.5)
+    off_scale = st.sidebar.slider("Offense scale (ORtg multiplier)", 0.80, 1.20, 1.00, 0.01)
+    def_scale = st.sidebar.slider(
+        "Defense scale (DRtg multiplier)",
+        0.80, 1.20, 1.00, 0.01,
+        help=">1.00 makes DRtg larger (worse defense) -> increases opponent points."
+    )
+    tempo_scale = st.sidebar.slider("Tempo scale (AdjT multiplier)", 0.80, 1.20, 1.00, 0.01)
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Bet Flag Thresholds")
+    spread_edge_threshold = st.sidebar.slider("Spread play threshold X", 0.0, 20.0, 2.0, 0.5)
+    total_edge_threshold = st.sidebar.slider("Total play threshold Y", 0.0, 30.0, 3.0, 0.5)
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Team Mapping")
+    fuzzy_cutoff = st.sidebar.slider(
+        "Fuzzy match strictness (higher = stricter)",
+        0.70, 0.95, 0.86, 0.01
+    )
+    st.sidebar.caption("If teams fail to map, lower strictness slightly or add to ALIAS_MAP.")
+
+    if kp_uploaded is None:
+        st.info("Upload your KenPom Excel file in the sidebar to begin.")
+        return
+
+    try:
+        df_kp = load_kenpom_excel(kp_uploaded)
+    except Exception as e:
+        st.error(f"Error loading KenPom file: {e}")
+        st.stop()
+
+    mode = st.radio("Select evaluation mode:", ["Single matchup", "Run full daily schedule"], horizontal=True)
+
+    if mode == "Single matchup":
+        teams = sorted(df_kp["Team"].unique().tolist())
+        c1, c2 = st.columns(2)
+        with c1:
+            away_team = st.selectbox("Visiting (Away) Team", teams, index=0)
+        with c2:
+            home_team = st.selectbox("Home Team", teams, index=1 if len(teams) > 1 else 0)
+
+        if away_team == home_team:
+            st.warning("Please choose two different teams.")
+            return
+
+        result = predict_matchup(
+            team_away=away_team,
+            team_home=home_team,
+            df_kp=df_kp,
+            home_edge_points=home_edge_points,
+            off_scale=off_scale,
+            def_scale=def_scale,
+            tempo_scale=tempo_scale,
+        )
+
+        st.markdown("## Predicted Score")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric(f"{result['Away']} (Away)", f"{result['Pred_Away']:.1f}")
+        m2.metric(f"{result['Home']} (Home)", f"{result['Pred_Home']:.1f}")
+        m3.metric("Total Points", f"{result['Total']:.1f}")
+        m4.metric("Home Margin (Home - Away)", f"{result['Home_Margin']:.1f}")
+
+        # Style tags (no impact on calculations)
+        try:
+            away_row = df_kp.loc[df_kp["Team"] == away_team].iloc[0]
+            home_row = df_kp.loc[df_kp["Team"] == home_team].iloc[0]
+            a_tag = str(away_row.get("Style_Tag", "")) if pd.notna(away_row.get("Style_Tag", "")) else ""
+            h_tag = str(home_row.get("Style_Tag", "")) if pd.notna(home_row.get("Style_Tag", "")) else ""
+            a_net = away_row.get("NetRtg", np.nan)
+            h_net = home_row.get("NetRtg", np.nan)
+
+            cA, cB = st.columns(2)
+            with cA:
+                st.markdown(f"**{away_team} Style:** {a_tag if a_tag else '—'}")
+                if pd.notna(a_net):
+                    st.caption(f"NetRtg: {a_net:.2f} • AdjT: {away_row.get('AdjT', np.nan):.1f}")
+            with cB:
+                st.markdown(f"**{home_team} Style:** {h_tag if h_tag else '—'}")
+                if pd.notna(h_net):
+                    st.caption(f"NetRtg: {h_net:.2f} • AdjT: {home_row.get('AdjT', np.nan):.1f}")
+        except Exception:
+            pass
+
+        with st.expander("KenPom data preview"):
+            st.dataframe(df_kp.head(25), use_container_width=True)
+
+    else:
+        st.markdown("## Run Full Daily Schedule")
+
+        sched_uploaded = st.file_uploader(
+            "2) Upload Schedule Excel (.xlsx) with Visitor + Home columns",
+            type=["xlsx", "xls"],
+            accept_multiple_files=False,
+            key="sched_upload",
+        )
+
+        if sched_uploaded is None:
+            st.info("Upload the daily schedule file to run all games.")
+            return
+
+        try:
+            schedule_df = load_schedule_excel(sched_uploaded)
+        except Exception as e:
+            st.error(f"Error loading schedule file: {e}")
+            st.stop()
+
+        st.write(f"Games found: **{len(schedule_df)}**")
+        with st.expander("Schedule preview"):
+            st.dataframe(schedule_df.head(50), use_container_width=True)
+
+        if st.button("Run all games", type="primary"):
+            results_df = run_schedule(
+                schedule_df=schedule_df,
+                df_kp=df_kp,
+                home_edge_points=home_edge_points,
+                off_scale=off_scale,
+                def_scale=def_scale,
+                tempo_scale=tempo_scale,
+                spread_edge_threshold=spread_edge_threshold,
+                total_edge_threshold=total_edge_threshold,
+                fuzzy_cutoff=fuzzy_cutoff,
+            )
+
+            st.markdown("### Full Results (mapping + edges + flags)")
+            st.dataframe(results_df, use_container_width=True)
+
+            # Unmapped rows
+            unmapped = results_df[results_df.get("Map_Status", "") != "OK"].copy()
+            if len(unmapped) > 0:
+                st.warning("Some teams could not be mapped to KenPom. These games were not simulated.")
+                with st.expander("Unmapped rows"):
+                    st.dataframe(unmapped, use_container_width=True)
+
+            # Filtered plays (only mapped)
+            spread_df = results_df[
+                (results_df.get("Spread_Play", False) == True) &
+                (results_df.get("Map_Status", "") == "OK")
+            ].copy()
+            total_df = results_df[
+                (results_df.get("Total_Play", False) == True) &
+                (results_df.get("Map_Status", "") == "OK")
+            ].copy()
+
+            # Sort by biggest edge
+            if "Edge_Spread" in spread_df.columns:
+                spread_df["AbsEdge"] = spread_df["Edge_Spread"].abs()
+                spread_df = spread_df.sort_values("AbsEdge", ascending=False).drop(columns=["AbsEdge"])
+            if "Edge_Total" in total_df.columns:
+                total_df["AbsEdge"] = total_df["Edge_Total"].abs()
+                total_df = total_df.sort_values("AbsEdge", ascending=False).drop(columns=["AbsEdge"])
+
+            st.markdown("## Filtered Plays")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**Spread Plays**")
+                st.dataframe(spread_df, use_container_width=True)
+            with c2:
+                st.write("**Total Plays**")
+                st.dataframe(total_df, use_container_width=True)
+
+            # -----------------------------
+            # Shareable Subscriber Card
+            # -----------------------------
+            st.markdown("## Daily Betting Card (Shareable)")
+
+            # Slim views for the card (only needed columns)
+            keep_spread = [c for c in ["Visitor", "Home", "Visitor_Tag", "Home_Tag", "Pred_Away", "Pred_Home", "Spread_Home", "Edge_Spread"] if c in spread_df.columns]
+            keep_total = [c for c in ["Visitor", "Home", "Visitor_Tag", "Home_Tag", "Pred_Away", "Pred_Home", "DK_Total", "Edge_Total"] if c in total_df.columns]
+            spread_card = spread_df[keep_spread].copy() if len(keep_spread) else pd.DataFrame()
+            total_card = total_df[keep_total].copy() if len(keep_total) else pd.DataFrame()
+
+            title = "NCAA Daily Model Card"
+            subtitle = (
+                f"Settings: HomeEdge={home_edge_points}, ORtg×{off_scale:.2f}, DRtg×{def_scale:.2f}, AdjT×{tempo_scale:.2f} | "
+                f"Flags: Spread X={spread_edge_threshold}, Total Y={total_edge_threshold}"
+            )
+
+            html = build_share_card_html(spread_card, total_card, title, subtitle)
+            st.components.v1.html(html, height=720, scrolling=True)
+
+            st.download_button(
+                "Download Share Card (HTML)",
+                data=html.encode("utf-8"),
+                file_name="dw_master_lock_picks_card.html",
+                mime="text/html",
+            )
+
+            # Download full results
+            csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="Download Full Results (CSV)",
+                data=csv_bytes,
+                file_name="schedule_predictions_full.csv",
+                mime="text/csv",
+            )
+
+
+if __name__ == "__main__":
+    main()
+
