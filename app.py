@@ -633,20 +633,20 @@ def derive_home_spread(visitor: str, home: str, dk_fav: str, dk_line_fav: float)
 
 
 # -----------------------------
-# SoS modifier (light, low-variance) -- DOUBLED EFFECT
+# SoS modifier (margin-only) — DOUBLE current effect (4× vs original)
 # -----------------------------
 def sos_margin_adjustment_pts(
     sos_home: float,
     sos_away: float,
     possessions: float,
     sos_weight: float,
-    sos_share: float = 0.40,   # doubled from 0.20
-    max_margin_pts: float = 10.0,  # doubled from 5.0
+    sos_share: float = 0.80,      # was 0.40 (2×); now doubled again
+    max_margin_pts: float = 20.0,  # was 10.0 (2×); now doubled again
 ) -> float:
     """
-    Returns a small margin-only adjustment in points applied to (home - away).
+    Returns a margin-only adjustment in points applied to (home - away).
     Uses blended SoS differential (home - away), scaled by sos_weight.
-    Capped to keep variance controlled. If SoS missing, returns 0.
+    Capped to keep it controlled. If SoS missing, returns 0.
     """
     if sos_weight is None or np.isnan(sos_weight) or sos_weight <= 0:
         return 0.0
@@ -892,12 +892,12 @@ def main():
     tempo_scale = st.sidebar.slider("Tempo scale (AdjT multiplier)", 0.80, 1.20, 1.00, 0.01)
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Strength of Schedule (hardcoded columns N/P/R) — 2× impact")
+    st.sidebar.subheader("Strength of Schedule (hardcoded columns N/P/R) — 4× impact")
     sos_weight = st.sidebar.slider(
         "SoS weight (0 = off, 1 = max effect)",
         0.0, 1.0, 0.20, 0.05,
         help="Applies a capped margin-only adjustment using SoS differential from KenPom columns "
-             "N=Net SoS, P=Off SoS, R=Def SoS. This version is tuned for ~2× the previous impact."
+             "N=Net SoS, P=Off SoS, R=Def SoS. This build doubles the prior (2×) impact again (≈4× original)."
     )
 
     st.sidebar.markdown("---")
