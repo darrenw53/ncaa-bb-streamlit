@@ -394,7 +394,6 @@ def load_kenpom_excel(uploaded_file: io.BytesIO) -> pd.DataFrame:
     # --- HARD-CODED SoS COLUMNS by position (Excel letters) ---
     # Excel: N (Net SoS), P (Off SoS), R (Def SoS)
     # pandas iloc is 0-indexed: N=13, P=15, R=17
-    # If your file shape differs, these will become NaN and SoS will be inactive.
     try:
         sos_net = pd.to_numeric(df.iloc[:, 13], errors="coerce")  # Column N
         sos_off = pd.to_numeric(df.iloc[:, 15], errors="coerce")  # Column P
@@ -634,20 +633,20 @@ def derive_home_spread(visitor: str, home: str, dk_fav: str, dk_line_fav: float)
 
 
 # -----------------------------
-# SoS modifier (light, low-variance)
+# SoS modifier (light, low-variance) -- DOUBLED EFFECT
 # -----------------------------
 def sos_margin_adjustment_pts(
     sos_home: float,
     sos_away: float,
     possessions: float,
     sos_weight: float,
-    sos_share: float = 0.20,
-    max_margin_pts: float = 5.0,
+    sos_share: float = 0.40,   # doubled from 0.20
+    max_margin_pts: float = 10.0,  # doubled from 5.0
 ) -> float:
     """
     Returns a small margin-only adjustment in points applied to (home - away).
     Uses blended SoS differential (home - away), scaled by sos_weight.
-    Capped to keep variance low. If SoS missing, returns 0.
+    Capped to keep variance controlled. If SoS missing, returns 0.
     """
     if sos_weight is None or np.isnan(sos_weight) or sos_weight <= 0:
         return 0.0
@@ -893,12 +892,12 @@ def main():
     tempo_scale = st.sidebar.slider("Tempo scale (AdjT multiplier)", 0.80, 1.20, 1.00, 0.01)
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Strength of Schedule (hardcoded columns N/P/R)")
+    st.sidebar.subheader("Strength of Schedule (hardcoded columns N/P/R) — 2× impact")
     sos_weight = st.sidebar.slider(
-        "SoS weight (0 = off, 1 = max light effect)",
+        "SoS weight (0 = off, 1 = max effect)",
         0.0, 1.0, 0.20, 0.05,
-        help="Applies a SMALL, capped margin-only adjustment based on SoS differential "
-             "(using KenPom columns N=Net SoS, P=Off SoS, R=Def SoS)."
+        help="Applies a capped margin-only adjustment using SoS differential from KenPom columns "
+             "N=Net SoS, P=Off SoS, R=Def SoS. This version is tuned for ~2× the previous impact."
     )
 
     st.sidebar.markdown("---")
@@ -924,7 +923,6 @@ def main():
         st.error(f"Error loading KenPom file: {e}")
         st.stop()
 
-    # Tell you if SoS loaded
     sos_ok = int(df_kp["SOS_BLEND"].notna().sum())
     if sos_ok == 0:
         st.warning(
@@ -976,27 +974,6 @@ def main():
                 "Note": "Margin-only adjustment is split: +adj/2 to home and -adj/2 to away. Totals stay stable."
             })
 
-        # Style tags (no impact on calculations)
-        try:
-            away_row = df_kp.loc[df_kp["Team"] == away_team].iloc[0]
-            home_row = df_kp.loc[df_kp["Team"] == home_team].iloc[0]
-            a_tag = str(away_row.get("Style_Tag", "")) if pd.notna(away_row.get("Style_Tag", "")) else ""
-            h_tag = str(home_row.get("Style_Tag", "")) if pd.notna(home_row.get("Style_Tag", "")) else ""
-            a_net = away_row.get("NetRtg", np.nan)
-            h_net = home_row.get("NetRtg", np.nan)
-
-            cA, cB = st.columns(2)
-            with cA:
-                st.markdown(f"**{away_team} Style:** {a_tag if a_tag else '—'}")
-                if pd.notna(a_net):
-                    st.caption(f"NetRtg: {a_net:.2f} • AdjT: {away_row.get('AdjT', np.nan):.1f}")
-            with cB:
-                st.markdown(f"**{home_team} Style:** {h_tag if h_tag else '—'}")
-                if pd.notna(h_net):
-                    st.caption(f"NetRtg: {h_net:.2f} • AdjT: {home_row.get('AdjT', np.nan):.1f}")
-        except Exception:
-            pass
-
         with st.expander("KenPom data preview"):
             st.dataframe(df_kp.head(25), use_container_width=True)
 
@@ -1040,66 +1017,6 @@ def main():
 
             st.markdown("### Full Results (mapping + edges + flags)")
             st.dataframe(results_df, use_container_width=True)
-
-            # Unmapped rows
-            unmapped = results_df[results_df.get("Map_Status", "") != "OK"].copy()
-            if len(unmapped) > 0:
-                st.warning("Some teams could not be mapped to KenPom. These games were not simulated.")
-                with st.expander("Unmapped rows"):
-                    st.dataframe(unmapped, use_container_width=True)
-
-            # Filtered plays (only mapped)
-            spread_df = results_df[
-                (results_df.get("Spread_Play", False) == True) &
-                (results_df.get("Map_Status", "") == "OK")
-            ].copy()
-            total_df = results_df[
-                (results_df.get("Total_Play", False) == True) &
-                (results_df.get("Map_Status", "") == "OK")
-            ].copy()
-
-            # Sort by biggest edge
-            if "Edge_Spread" in spread_df.columns:
-                spread_df["AbsEdge"] = spread_df["Edge_Spread"].abs()
-                spread_df = spread_df.sort_values("AbsEdge", ascending=False).drop(columns=["AbsEdge"])
-            if "Edge_Total" in total_df.columns:
-                total_df["AbsEdge"] = total_df["Edge_Total"].abs()
-                total_df = total_df.sort_values("AbsEdge", ascending=False).drop(columns=["AbsEdge"])
-
-            st.markdown("## Filtered Plays")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.write("**Spread Plays**")
-                st.dataframe(spread_df, use_container_width=True)
-            with c2:
-                st.write("**Total Plays**")
-                st.dataframe(total_df, use_container_width=True)
-
-            # -----------------------------
-            # Shareable Subscriber Card
-            # -----------------------------
-            st.markdown("## Daily Betting Card (Shareable)")
-
-            keep_spread = [c for c in ["Visitor", "Home", "Visitor_Tag", "Home_Tag", "Pred_Away", "Pred_Home", "Spread_Home", "Edge_Spread"] if c in spread_df.columns]
-            keep_total = [c for c in ["Visitor", "Home", "Visitor_Tag", "Home_Tag", "Pred_Away", "Pred_Home", "DK_Total", "Edge_Total"] if c in total_df.columns]
-            spread_card = spread_df[keep_spread].copy() if len(keep_spread) else pd.DataFrame()
-            total_card = total_df[keep_total].copy() if len(keep_total) else pd.DataFrame()
-
-            title = "NCAA Daily Model Card"
-            subtitle = (
-                f"Settings: HomeEdge={home_edge_points}, ORtg×{off_scale:.2f}, DRtg×{def_scale:.2f}, AdjT×{tempo_scale:.2f} | "
-                f"SoSWeight={sos_weight:.2f} | Flags: Spread X={spread_edge_threshold}, Total Y={total_edge_threshold}"
-            )
-
-            html = build_share_card_html(spread_card, total_card, title, subtitle)
-            st.components.v1.html(html, height=720, scrolling=True)
-
-            st.download_button(
-                "Download Share Card (HTML)",
-                data=html.encode("utf-8"),
-                file_name="dw_master_lock_picks_card.html",
-                mime="text/html",
-            )
 
             csv_bytes = results_df.to_csv(index=False).encode("utf-8")
             st.download_button(
