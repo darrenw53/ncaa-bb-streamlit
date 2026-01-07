@@ -98,14 +98,16 @@ def build_share_card_html(spread_df, total_df, title, subtitle):
 
         rows = []
         for _, r in df.iterrows():
-            vtag = safe_get(r,'Visitor_Tag')
-            htag = safe_get(r,'Home_Tag')
+            vtag = safe_get(r, 'Visitor_Tag')
+            htag = safe_get(r, 'Home_Tag')
             tag_txt = ""
             if isinstance(vtag, str) and vtag.strip():
                 tag_txt += f" {vtag.strip()}"
             if isinstance(htag, str) and htag.strip():
                 tag_txt += f" / {htag.strip()}" if tag_txt else f" {htag.strip()}"
-            matchup = f"{safe_get(r,'Visitor')} @ {safe_get(r,'Home')}" + (f" <span style='opacity:0.8;font-weight:700'>[{tag_txt.strip()}]</span>" if tag_txt else "")
+            matchup = f"{safe_get(r,'Visitor')} @ {safe_get(r,'Home')}" + (
+                f" <span style='opacity:0.8;font-weight:700'>[{tag_txt.strip()}]</span>" if tag_txt else ""
+            )
             score = f"{fmt_num(safe_get(r,'Pred_Away'))} - {fmt_num(safe_get(r,'Pred_Home'))}"
 
             if kind == "spread":
@@ -148,7 +150,6 @@ def build_share_card_html(spread_df, total_df, title, subtitle):
         )
         return f"<table>{header}{''.join(rows)}</table>"
 
-    # Branded banner text
     brand_line = "DW’s Master Lock Picks of The Day"
     brand_tag = "NCAA • Model Edges • Daily Card"
 
@@ -173,7 +174,6 @@ def build_share_card_html(spread_df, total_df, title, subtitle):
           background: #fff;
         }}
 
-        /* Flashy hero banner */
         .hero {{
           position: relative;
           padding: 22px 22px 18px 22px;
@@ -253,7 +253,6 @@ def build_share_card_html(spread_df, total_df, title, subtitle):
           margin-left: auto;
         }}
 
-        /* Inner content */
         .content {{
           padding: 18px 22px 18px 22px;
         }}
@@ -392,43 +391,34 @@ def load_kenpom_excel(uploaded_file: io.BytesIO) -> pd.DataFrame:
         if col not in df.columns:
             raise ValueError(f"Expected column '{col}' not found. Found: {df.columns.tolist()}")
 
-    # --- Optional SoS column detection (light use, low variance) ---
-    # Common KenPom-ish variants:
-    # "SOS", "SoS", "AdjSOS", "Adj SOS", "SOS (Adj)", "Strength of Schedule", etc.
-    sos_col = None
-    candidates = []
-    for c in df.columns:
-        cl = str(c).strip().lower()
-        if cl in {"sos", "adj_sos", "adjsos"}:
-            candidates.append(c)
-        elif "strength of schedule" in cl:
-            candidates.append(c)
-        elif cl.replace(" ", "") in {"adjsos", "sos(adj)", "sosadjusted"}:
-            candidates.append(c)
-        elif cl == "sos (adj)" or cl == "sos(adj)":
-            candidates.append(c)
-        elif cl.startswith("sos"):
-            # e.g. "SOS Rank" would also match; we prefer numeric columns later
-            candidates.append(c)
-
-    # pick the first candidate that becomes mostly numeric
-    for c in candidates:
-        ser = pd.to_numeric(df[c], errors="coerce")
-        if ser.notna().sum() >= max(25, int(0.25 * len(df))):
-            sos_col = c
-            break
+    # --- HARD-CODED SoS COLUMNS by position (Excel letters) ---
+    # Excel: N (Net SoS), P (Off SoS), R (Def SoS)
+    # pandas iloc is 0-indexed: N=13, P=15, R=17
+    # If your file shape differs, these will become NaN and SoS will be inactive.
+    try:
+        sos_net = pd.to_numeric(df.iloc[:, 13], errors="coerce")  # Column N
+        sos_off = pd.to_numeric(df.iloc[:, 15], errors="coerce")  # Column P
+        sos_def = pd.to_numeric(df.iloc[:, 17], errors="coerce")  # Column R
+    except Exception:
+        sos_net = pd.Series(np.nan, index=df.index)
+        sos_off = pd.Series(np.nan, index=df.index)
+        sos_def = pd.Series(np.nan, index=df.index)
 
     out = pd.DataFrame({
         "Team": df[team_col].astype(str).str.strip(),
         "ORtg": pd.to_numeric(df["ORtg"], errors="coerce"),
         "DRtg": pd.to_numeric(df["DRtg"], errors="coerce"),
         "AdjT": pd.to_numeric(df["AdjT"], errors="coerce"),
+
+        # hardcoded SoS fields
+        "SOS_NET": sos_net,
+        "SOS_OFF": sos_off,
+        "SOS_DEF": sos_def,
     })
 
-    if sos_col is not None:
-        out["SOS"] = pd.to_numeric(df[sos_col], errors="coerce")
-    else:
-        out["SOS"] = np.nan
+    # --- Blended SoS (stable, low variance) ---
+    # Net SoS is most important, Off/Def secondary.
+    out["SOS_BLEND"] = (0.50 * out["SOS_NET"]) + (0.25 * out["SOS_OFF"]) + (0.25 * out["SOS_DEF"])
 
     # Derived metrics (tagging only; does NOT alter predictions)
     out["NetRtg"] = out["ORtg"] - out["DRtg"]
@@ -651,40 +641,22 @@ def sos_margin_adjustment_pts(
     sos_away: float,
     possessions: float,
     sos_weight: float,
-    sos_share: float = 0.15,
-    max_margin_pts: float = 4.0,
+    sos_share: float = 0.20,
+    max_margin_pts: float = 5.0,
 ) -> float:
     """
-    Returns a small margin-only adjustment in *points* applied to (home - away).
-
-    - Uses the SoS differential (home - away).
-    - Applies only a fraction (sos_share) and scales by sos_weight (0..1 slider).
-    - Converts from per-100 poss to game points using possessions/100.
-    - Caps magnitude to avoid high variance.
-
-    If SOS is missing for either team, returns 0.
+    Returns a small margin-only adjustment in points applied to (home - away).
+    Uses blended SoS differential (home - away), scaled by sos_weight.
+    Capped to keep variance low. If SoS missing, returns 0.
     """
     if sos_weight is None or np.isnan(sos_weight) or sos_weight <= 0:
         return 0.0
-    if sos_home is None or sos_away is None:
-        return 0.0
-    if (isinstance(sos_home, float) and np.isnan(sos_home)) or (isinstance(sos_away, float) and np.isnan(sos_away)):
-        return 0.0
-    if possessions is None or (isinstance(possessions, float) and np.isnan(possessions)):
+    if any(pd.isna(x) for x in [sos_home, sos_away, possessions]):
         return 0.0
 
-    # SoS differential in "points per 100 possessions" terms (typical KenPom SOS style)
-    sos_diff = float(sos_home) - float(sos_away)
-
-    # Only take a small slice of SoS diff (safe, low variance)
-    adj_per100 = sos_weight * sos_share * sos_diff  # points/100 possessions
-
-    # Convert to game points
-    adj_pts = adj_per100 * (float(possessions) / 100.0)
-
-    # Cap to keep this light
-    adj_pts = float(np.clip(adj_pts, -max_margin_pts, max_margin_pts))
-    return adj_pts
+    sos_diff = float(sos_home) - float(sos_away)  # home - away
+    adj_pts = sos_diff * sos_share * float(sos_weight) * (float(possessions) / 100.0)
+    return float(np.clip(adj_pts, -max_margin_pts, max_margin_pts))
 
 
 # -----------------------------
@@ -719,21 +691,20 @@ def predict_matchup(
     away_pts = away_pts_neutral
     home_pts = home_pts_neutral + home_edge_points
 
-    # --- Light SoS modifier: adjust MARGIN only, keep totals stable ---
-    # We convert SoS diff into a small point adjustment, then add half to home and subtract half from away.
-    sos_home = home_row.get("SOS", np.nan)
-    sos_away = away_row.get("SOS", np.nan)
+    # --- HARD-CODED SoS (blended) : margin-only adjustment ---
+    sos_home = home_row.get("SOS_BLEND", np.nan)
+    sos_away = away_row.get("SOS_BLEND", np.nan)
+
     margin_adj_pts = sos_margin_adjustment_pts(
         sos_home=sos_home,
         sos_away=sos_away,
         possessions=possessions,
         sos_weight=sos_weight,
-        sos_share=0.15,        # small slice of SoS diff
-        max_margin_pts=4.0,    # cap to avoid volatility
     )
 
-    home_pts = home_pts + (margin_adj_pts / 2.0)
-    away_pts = away_pts - (margin_adj_pts / 2.0)
+    # Split margin-only adjustment so total stays stable
+    home_pts += (margin_adj_pts / 2.0)
+    away_pts -= (margin_adj_pts / 2.0)
 
     margin_home = home_pts - away_pts
     total_pts = home_pts + away_pts
@@ -746,8 +717,8 @@ def predict_matchup(
         "Pred_Home": float(np.round(home_pts, 1)),
         "Home_Margin": float(np.round(margin_home, 1)),
         "Total": float(np.round(total_pts, 1)),
-        "SoS_Home": float(sos_home) if pd.notna(sos_home) else np.nan,
         "SoS_Away": float(sos_away) if pd.notna(sos_away) else np.nan,
+        "SoS_Home": float(sos_home) if pd.notna(sos_home) else np.nan,
         "SoS_MarginAdj_Pts": float(np.round(margin_adj_pts, 2)),
     }
 
@@ -796,6 +767,9 @@ def run_schedule(
                 "Pred_Home": np.nan,
                 "Home_Margin": np.nan,
                 "Total": np.nan,
+                "SoS_Away": np.nan,
+                "SoS_Home": np.nan,
+                "SoS_MarginAdj_Pts": np.nan,
                 "Edge_Spread": np.nan,
                 "Edge_Total": np.nan,
                 "Spread_Play": False,
@@ -808,9 +782,6 @@ def run_schedule(
                 "Home_Fraud": False,
                 "Visitor_Tag": "",
                 "Home_Tag": "",
-                "SoS_Home": np.nan,
-                "SoS_Away": np.nan,
-                "SoS_MarginAdj_Pts": np.nan,
                 "Map_Status": "UNMAPPED (needs alias/manual fix)"
             })
             results_rows.append(base)
@@ -922,12 +893,12 @@ def main():
     tempo_scale = st.sidebar.slider("Tempo scale (AdjT multiplier)", 0.80, 1.20, 1.00, 0.01)
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Strength of Schedule (light modifier)")
+    st.sidebar.subheader("Strength of Schedule (hardcoded columns N/P/R)")
     sos_weight = st.sidebar.slider(
         "SoS weight (0 = off, 1 = max light effect)",
         0.0, 1.0, 0.20, 0.05,
-        help="Applies a SMALL, capped margin-only adjustment based on SoS differential (home - away). "
-             "Safe/low-variance by design."
+        help="Applies a SMALL, capped margin-only adjustment based on SoS differential "
+             "(using KenPom columns N=Net SoS, P=Off SoS, R=Def SoS)."
     )
 
     st.sidebar.markdown("---")
@@ -953,11 +924,16 @@ def main():
         st.error(f"Error loading KenPom file: {e}")
         st.stop()
 
-    # Quick visibility on whether SoS was detected
-    if df_kp["SOS"].notna().sum() == 0:
-        st.info("SoS column not detected in your KenPom file (SoS weight will have no effect).")
+    # Tell you if SoS loaded
+    sos_ok = int(df_kp["SOS_BLEND"].notna().sum())
+    if sos_ok == 0:
+        st.warning(
+            "SoS_BLEND is missing for all teams. "
+            "Your hardcoded columns (N/P/R) may not exist in this upload after the header row. "
+            "SoS weight will have no effect."
+        )
     else:
-        st.caption(f"SoS detected for {df_kp['SOS'].notna().sum()} teams. (SoS weight slider is active.)")
+        st.caption(f"SoS loaded for {sos_ok} teams (SOS_BLEND from columns N/P/R).")
 
     mode = st.radio("Select evaluation mode:", ["Single matchup", "Run full daily schedule"], horizontal=True)
 
@@ -991,14 +967,13 @@ def main():
         m3.metric("Total Points", f"{result['Total']:.1f}")
         m4.metric("Home Margin (Home - Away)", f"{result['Home_Margin']:.1f}")
 
-        # Show SoS adjustment detail (if available)
         with st.expander("SoS modifier (debug)"):
             st.write({
-                "SoS_Away": result.get("SoS_Away", np.nan),
-                "SoS_Home": result.get("SoS_Home", np.nan),
+                "SoS_Away (blend)": result.get("SoS_Away", np.nan),
+                "SoS_Home (blend)": result.get("SoS_Home", np.nan),
                 "SoS_MarginAdj_Pts (home - away)": result.get("SoS_MarginAdj_Pts", np.nan),
                 "SoS_weight": sos_weight,
-                "Note": "Margin-only adjustment is split: +adj/2 to home and -adj/2 to away. Totals remain stable."
+                "Note": "Margin-only adjustment is split: +adj/2 to home and -adj/2 to away. Totals stay stable."
             })
 
         # Style tags (no impact on calculations)
@@ -1105,7 +1080,6 @@ def main():
             # -----------------------------
             st.markdown("## Daily Betting Card (Shareable)")
 
-            # Slim views for the card (only needed columns)
             keep_spread = [c for c in ["Visitor", "Home", "Visitor_Tag", "Home_Tag", "Pred_Away", "Pred_Home", "Spread_Home", "Edge_Spread"] if c in spread_df.columns]
             keep_total = [c for c in ["Visitor", "Home", "Visitor_Tag", "Home_Tag", "Pred_Away", "Pred_Home", "DK_Total", "Edge_Total"] if c in total_df.columns]
             spread_card = spread_df[keep_spread].copy() if len(keep_spread) else pd.DataFrame()
@@ -1127,7 +1101,6 @@ def main():
                 mime="text/html",
             )
 
-            # Download full results
             csv_bytes = results_df.to_csv(index=False).encode("utf-8")
             st.download_button(
                 label="Download Full Results (CSV)",
