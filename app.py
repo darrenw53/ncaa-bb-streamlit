@@ -1108,7 +1108,7 @@ def main():
         )
         return
 
-    # st.caption(f"KenPom source: **{kp_source}**")
+    st.caption(f"KenPom source: **{kp_source}**")
 
     # Sidebar controls
     st.sidebar.markdown("---")
@@ -1159,7 +1159,7 @@ def main():
             "SoS weight will have no effect."
         )
     else:
-        # st.caption(f"SoS loaded for {sos_ok} teams (SOS_BLEND from columns N/P/R).")
+        st.caption(f"SoS loaded for {sos_ok} teams (SOS_BLEND from columns N/P/R).")
 
     mode = st.radio("Select evaluation mode:", ["Single matchup", "Run full daily schedule"], horizontal=True)
 
@@ -1264,5 +1264,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
