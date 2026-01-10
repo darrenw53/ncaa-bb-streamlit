@@ -17,11 +17,12 @@ except Exception:
 # ============================================================
 # CONFIG: REPO ROOT AUTO-LOADING
 # ============================================================
-# This now searches the REPO ROOT (same folder as app.py)
-# Put files like:
-#   kenpom_1.10.26.xlsx
-#   Schedule_1.10.26.xlsx
+# Repo root (same folder as app.py)
 REPO_ROOT = Path(__file__).parent
+
+# Logo expected in repo root (you said you added it to main repo)
+LOGO_FILENAME = "SignalAI_Logo.png"
+LOGO_PATH = REPO_ROOT / LOGO_FILENAME
 
 # Optional GitHub fallback (if you want it):
 GITHUB_OWNER = ""   # e.g. "DarrenWitter"
@@ -120,8 +121,8 @@ def build_share_card_html(spread_df, total_df, title, subtitle):
 
         rows = []
         for _, r in df.iterrows():
-            vtag = safe_get(r, "Visitor_Tag")
-            htag = safe_get(r, "Home_Tag")
+            vtag = safe_get(r, 'Visitor_Tag')
+            htag = safe_get(r, 'Home_Tag')
             tag_txt = ""
             if isinstance(vtag, str) and vtag.strip():
                 tag_txt += f" {vtag.strip()}"
@@ -1008,7 +1009,19 @@ def run_schedule(
 # -----------------------------
 def main():
     st.set_page_config(page_title="SignalAI NCAA Predictor", layout="wide")
-    st.title("SignalAI NCAA Predictor")
+
+    # ===== Header with Logo =====
+    h1, h2 = st.columns([1, 5], vertical_alignment="center")
+    with h1:
+        if LOGO_PATH.exists():
+            st.image(str(LOGO_PATH), width=110)
+        else:
+            # If the logo isn't found, don't show anything (keeps header clean)
+            # You can temporarily uncomment the next line for troubleshooting:
+            # st.warning(f"Logo not found at: {LOGO_PATH}")
+            pass
+    with h2:
+        st.title("SignalAI NCAA Predictor")
 
     st.sidebar.header("Data source (Repo Root)")
 
@@ -1108,7 +1121,10 @@ def main():
         )
         return
 
-    st.caption(f"KenPom source: **{kp_source}**")
+    # ------------------------------------------------------------
+    # (COMMENTED OUT) Status text you said you don't want shown
+    # ------------------------------------------------------------
+    # st.caption(f"KenPom source: **{kp_source}**")
 
     # Sidebar controls
     st.sidebar.markdown("---")
@@ -1159,7 +1175,11 @@ def main():
             "SoS weight will have no effect."
         )
     else:
-        st.caption(f"SoS loaded for {sos_ok} teams (SOS_BLEND from columns N/P/R).")
+        # ------------------------------------------------------------
+        # (COMMENTED OUT) Status text you said you don't want shown
+        # ------------------------------------------------------------
+        # st.caption(f"SoS loaded for {sos_ok} teams (SOS_BLEND from columns N/P/R).")
+        pass
 
     mode = st.radio("Select evaluation mode:", ["Single matchup", "Run full daily schedule"], horizontal=True)
 
@@ -1219,7 +1239,8 @@ def main():
             sched_bytes = auto_sched_bytes
             sched_source = auto_sched_label or "Not found"
 
-        st.caption(f"Schedule source: **{sched_source}**")
+        # (Optional) If you also want to hide schedule source text, keep it commented:
+        # st.caption(f"Schedule source: **{sched_source}**")
 
         if sched_bytes is None:
             st.info(
