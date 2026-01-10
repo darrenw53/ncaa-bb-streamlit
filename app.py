@@ -1007,8 +1007,8 @@ def run_schedule(
 # Streamlit App (repo root auto-load)
 # -----------------------------
 def main():
-    st.set_page_config(page_title="KenPom Matchup Predictor", layout="wide")
-    st.title("KenPom Matchup Predictor")
+    st.set_page_config(page_title="SignalAI NCAA Predictor", layout="wide")
+    st.title("SignalAI NCAA Predictor")
 
     st.sidebar.header("Data source (Repo Root)")
 
@@ -1264,3 +1264,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
