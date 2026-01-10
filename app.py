@@ -1,9 +1,34 @@
-﻿import io
+import io
 import re
 import difflib
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+# Optional (only needed if you enable GitHub fallback)
+try:
+    import requests
+except Exception:
+    requests = None
+
+
+# ============================================================
+# CONFIG: REPO ROOT AUTO-LOADING
+# ============================================================
+# This now searches the REPO ROOT (same folder as app.py)
+# Put files like:
+#   kenpom_1.10.26.xlsx
+#   Schedule_1.10.26.xlsx
+REPO_ROOT = Path(__file__).parent
+
+# Optional GitHub fallback (if you want it):
+GITHUB_OWNER = ""   # e.g. "DarrenWitter"
+GITHUB_REPO = ""    # e.g. "NCAA_BB"
+GITHUB_BRANCH = "main"
+GITHUB_DATA_DIR = ""  # repo root
+
 
 # -----------------------------
 # Constants (match your sheet)
@@ -15,12 +40,9 @@ AVG_TEMPO = 64.8
 # -----------------------------
 # Trapezoid / Fraud tagging
 # -----------------------------
-# Trapezoid polygon (pace x net rating) tuned to mirror your reference chart.
-# Points: (64,26) -> (66,38) -> (73,38) -> (75,26)
 TRAP_POLY_X = [64.0, 66.0, 73.0, 75.0]
 TRAP_POLY_Y = [26.0, 38.0, 38.0, 26.0]
 
-# Fraud zone heuristic (does NOT affect any calculations; only tagging)
 FRAUD_PACE_MIN = 71.0
 FRAUD_NET_MAX = 26.0
 
@@ -350,6 +372,126 @@ def build_share_card_html(spread_df, total_df, title, subtitle):
     return html
 
 
+# ============================================================
+# AUTO-LOADING HELPERS (repo root + optional GitHub API)
+# ============================================================
+def _extract_date_key_from_filename(name: str):
+    """
+    Parse dates in filenames like:
+      kenpom_1.10.26.xlsx
+      Schedule_01.10.2026.xlsx
+      kenpom_2026-01-10.xlsx
+    Returns a comparable tuple (year, month, day) or None.
+    """
+    s = name.lower()
+
+    # 2026-01-10
+    m = re.search(r"(20\d{2})[-_.](\d{1,2})[-_.](\d{1,2})", s)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return (y, mo, d)
+
+    # 1.10.26 or 01.10.2026
+    m = re.search(r"(\d{1,2})[.](\d{1,2})[.](\d{2,4})", s)
+    if m:
+        mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if y < 100:
+            y += 2000
+        return (y, mo, d)
+
+    return None
+
+
+def find_latest_local_file(pattern: str, folder: Path) -> Path | None:
+    """
+    Finds the newest file matching pattern.
+    Uses:
+      1) date parsed from filename if possible
+      2) otherwise filesystem mtime
+    """
+    files = sorted(folder.glob(pattern))
+    if not files:
+        return None
+
+    scored = []
+    for p in files:
+        dk = _extract_date_key_from_filename(p.name)
+        scored.append((dk if dk is not None else (0, 0, 0), p))
+
+    any_dated = any(k != (0, 0, 0) for k, _ in scored)
+    if any_dated:
+        scored = [sp for sp in scored if sp[0] != (0, 0, 0)]
+        scored.sort(key=lambda x: x[0])
+        return scored[-1][1]
+
+    files.sort(key=lambda p: p.stat().st_mtime)
+    return files[-1]
+
+
+def github_list_dir(owner: str, repo: str, path: str, branch: str, token: str | None):
+    """
+    Lists files in a GitHub directory via API.
+    If path == "" -> lists repo root.
+    """
+    if requests is None:
+        raise RuntimeError("requests is not installed, cannot use GitHub API fallback.")
+
+    path = (path or "").strip().strip("/")
+    base = f"https://api.github.com/repos/{owner}/{repo}/contents"
+    url = base + (f"/{path}" if path else "")
+
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    params = {"ref": branch}
+
+    r = requests.get(url, headers=headers, params=params, timeout=20)
+    if r.status_code != 200:
+        raise RuntimeError(f"GitHub API error {r.status_code}: {r.text}")
+    return r.json()
+
+
+def github_download_raw(download_url: str, token: str | None) -> bytes:
+    if requests is None:
+        raise RuntimeError("requests is not installed, cannot use GitHub API fallback.")
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    r = requests.get(download_url, headers=headers, timeout=30)
+    if r.status_code != 200:
+        raise RuntimeError(f"GitHub download error {r.status_code}: {r.text}")
+    return r.content
+
+
+def find_latest_github_file(owner: str, repo: str, folder: str, pattern_regex: str, branch: str, token: str | None):
+    """
+    Finds newest by filename date (preferred). If no date match, uses name sort.
+    Returns (name, bytes) or (None, None)
+    """
+    items = github_list_dir(owner, repo, folder, branch, token)
+    files = [x for x in items if isinstance(x, dict) and x.get("type") == "file"]
+    files = [f for f in files if re.match(pattern_regex, f.get("name", ""), flags=re.IGNORECASE)]
+    if not files:
+        return None, None
+
+    scored = []
+    for f in files:
+        name = f.get("name", "")
+        dk = _extract_date_key_from_filename(name)
+        scored.append((dk if dk is not None else (0, 0, 0), f))
+
+    any_dated = any(k != (0, 0, 0) for k, _ in scored)
+    if any_dated:
+        scored = [sp for sp in scored if sp[0] != (0, 0, 0)]
+        scored.sort(key=lambda x: x[0])
+        best = scored[-1][1]
+    else:
+        best = sorted(files, key=lambda x: x.get("name", ""))[-1]
+
+    content = github_download_raw(best["download_url"], token)
+    return best["name"], content
+
+
 # -----------------------------
 # Robust weekly KenPom loader
 # -----------------------------
@@ -408,15 +550,12 @@ def load_kenpom_excel(uploaded_file: io.BytesIO) -> pd.DataFrame:
         "ORtg": pd.to_numeric(df["ORtg"], errors="coerce"),
         "DRtg": pd.to_numeric(df["DRtg"], errors="coerce"),
         "AdjT": pd.to_numeric(df["AdjT"], errors="coerce"),
-
-        # hardcoded SoS fields
         "SOS_NET": sos_net,
         "SOS_OFF": sos_off,
         "SOS_DEF": sos_def,
     })
 
     # --- Blended SoS (stable, low variance) ---
-    # Net SoS is most important, Off/Def secondary.
     out["SOS_BLEND"] = (0.50 * out["SOS_NET"]) + (0.25 * out["SOS_OFF"]) + (0.25 * out["SOS_DEF"])
 
     # Derived metrics (tagging only; does NOT alter predictions)
@@ -865,23 +1004,115 @@ def run_schedule(
 
 
 # -----------------------------
-# Streamlit App
+# Streamlit App (repo root auto-load)
 # -----------------------------
 def main():
     st.set_page_config(page_title="KenPom Matchup Predictor", layout="wide")
     st.title("KenPom Matchup Predictor")
 
-    st.sidebar.header("Upload + Controls")
+    st.sidebar.header("Data source (Repo Root)")
 
+    # Auto-load from repo root
+    kp_path = find_latest_local_file("kenpom_*.xls*", REPO_ROOT)
+    sched_path = find_latest_local_file("Schedule_*.xls*", REPO_ROOT)
+
+    auto_kp_bytes = None
+    auto_sched_bytes = None
+    auto_kp_label = None
+    auto_sched_label = None
+
+    if kp_path and kp_path.exists():
+        auto_kp_bytes = kp_path.read_bytes()
+        auto_kp_label = f"Local (repo root): {kp_path.name}"
+    if sched_path and sched_path.exists():
+        auto_sched_bytes = sched_path.read_bytes()
+        auto_sched_label = f"Local (repo root): {sched_path.name}"
+
+    # Optional GitHub fallback
+    use_github_fallback = st.sidebar.toggle(
+        "Enable GitHub fallback (if local files missing)",
+        value=False,
+        help="Uses GitHub API to find and download the newest Excel files from the repo root. "
+             "Useful for private repos or if files aren't present in the build image."
+    )
+
+    if use_github_fallback and (auto_kp_bytes is None or auto_sched_bytes is None):
+        if not (GITHUB_OWNER and GITHUB_REPO):
+            st.sidebar.error("Set GITHUB_OWNER and GITHUB_REPO at the top of app.py to use GitHub fallback.")
+        else:
+            gh_token = None
+            try:
+                gh_token = st.secrets.get("GH_TOKEN", None)
+            except Exception:
+                gh_token = None
+
+            with st.sidebar.spinner("Checking GitHub for newest files..."):
+                try:
+                    if auto_kp_bytes is None:
+                        name, b = find_latest_github_file(
+                            owner=GITHUB_OWNER,
+                            repo=GITHUB_REPO,
+                            folder=GITHUB_DATA_DIR,  # "" => repo root
+                            pattern_regex=r"^kenpom_.*\.xls[x]?$",
+                            branch=GITHUB_BRANCH,
+                            token=gh_token,
+                        )
+                        if b:
+                            auto_kp_bytes = b
+                            auto_kp_label = f"GitHub (root): {name}"
+
+                    if auto_sched_bytes is None:
+                        name, b = find_latest_github_file(
+                            owner=GITHUB_OWNER,
+                            repo=GITHUB_REPO,
+                            folder=GITHUB_DATA_DIR,  # "" => repo root
+                            pattern_regex=r"^Schedule_.*\.xls[x]?$",
+                            branch=GITHUB_BRANCH,
+                            token=gh_token,
+                        )
+                        if b:
+                            auto_sched_bytes = b
+                            auto_sched_label = f"GitHub (root): {name}"
+                except Exception as e:
+                    st.sidebar.error(f"GitHub fallback failed: {e}")
+
+    # Manual upload override (still available)
+    st.sidebar.markdown("---")
+    st.sidebar.caption("Auto-load is used if found. Upload overrides auto-load.")
     kp_uploaded = st.sidebar.file_uploader(
-        "1) Upload KenPom Excel (.xlsx)",
+        "KenPom Excel (.xlsx) — optional override",
         type=["xlsx", "xls"],
         accept_multiple_files=False,
         key="kp_upload",
     )
+    sched_uploaded = st.sidebar.file_uploader(
+        "Schedule Excel (.xlsx) — optional override (schedule mode)",
+        type=["xlsx", "xls"],
+        accept_multiple_files=False,
+        key="sched_upload_override",
+    )
 
+    # Decide final KenPom bytes
+    if kp_uploaded is not None:
+        kp_bytes = kp_uploaded.getvalue()
+        kp_source = "Manual upload"
+    else:
+        kp_bytes = auto_kp_bytes
+        kp_source = auto_kp_label or "Not found"
+
+    if kp_bytes is None:
+        st.info(
+            "No KenPom file found in repo root.\n\n"
+            "Fix: commit a file named like `kenpom_1.10.26.xlsx` into the repo root (same folder as app.py),\n"
+            "or upload manually in the sidebar."
+        )
+        return
+
+    st.caption(f"KenPom source: **{kp_source}**")
+
+    # Sidebar controls
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Adjustments")
+    st.sidebar.header("Adjustments")
     home_edge_points = st.sidebar.slider("Home edge (pts added to HOME score)", -10.0, 10.0, 3.0, 0.5)
     off_scale = st.sidebar.slider("Offense scale (ORtg multiplier)", 0.80, 1.20, 1.00, 0.01)
     def_scale = st.sidebar.slider(
@@ -897,7 +1128,7 @@ def main():
         "SoS weight (0 = off, 1 = max effect)",
         0.0, 1.0, 0.20, 0.05,
         help="Applies a capped margin-only adjustment using SoS differential from KenPom columns "
-             "N=Net SoS, P=Off SoS, R=Def SoS. This build doubles the prior (2×) impact again (≈4× original)."
+             "N=Net SoS, P=Off SoS, R=Def SoS. This build is ~4× the original impact."
     )
 
     st.sidebar.markdown("---")
@@ -913,12 +1144,9 @@ def main():
     )
     st.sidebar.caption("If teams fail to map, lower strictness slightly or add to ALIAS_MAP.")
 
-    if kp_uploaded is None:
-        st.info("Upload your KenPom Excel file in the sidebar to begin.")
-        return
-
+    # Load KenPom
     try:
-        df_kp = load_kenpom_excel(kp_uploaded)
+        df_kp = load_kenpom_excel(io.BytesIO(kp_bytes))
     except Exception as e:
         st.error(f"Error loading KenPom file: {e}")
         st.stop()
@@ -980,19 +1208,26 @@ def main():
     else:
         st.markdown("## Run Full Daily Schedule")
 
-        sched_uploaded = st.file_uploader(
-            "2) Upload Schedule Excel (.xlsx) with Visitor + Home columns",
-            type=["xlsx", "xls"],
-            accept_multiple_files=False,
-            key="sched_upload",
-        )
+        # Schedule bytes: manual override wins, else repo root auto-load
+        if sched_uploaded is not None:
+            sched_bytes = sched_uploaded.getvalue()
+            sched_source = "Manual upload"
+        else:
+            sched_bytes = auto_sched_bytes
+            sched_source = auto_sched_label or "Not found"
 
-        if sched_uploaded is None:
-            st.info("Upload the daily schedule file to run all games.")
+        st.caption(f"Schedule source: **{sched_source}**")
+
+        if sched_bytes is None:
+            st.info(
+                "No schedule file found in repo root.\n\n"
+                "Fix: commit a file named like `Schedule_1.10.26.xlsx` into the repo root (same folder as app.py),\n"
+                "or upload manually in the sidebar."
+            )
             return
 
         try:
-            schedule_df = load_schedule_excel(sched_uploaded)
+            schedule_df = load_schedule_excel(io.BytesIO(sched_bytes))
         except Exception as e:
             st.error(f"Error loading schedule file: {e}")
             st.stop()
