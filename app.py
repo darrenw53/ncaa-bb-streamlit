@@ -1,6 +1,7 @@
 import io
 import re
 import difflib
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -17,14 +18,11 @@ except Exception:
 # ============================================================
 # CONFIG: REPO ROOT AUTO-LOADING
 # ============================================================
-# Repo root (same folder as app.py)
 REPO_ROOT = Path(__file__).parent
 
-# Logo expected in repo root (you said you added it to main repo)
 LOGO_FILENAME = "SignalAI_Logo.png"
 LOGO_PATH = REPO_ROOT / LOGO_FILENAME
 
-# Optional GitHub fallback (if you want it):
 GITHUB_OWNER = ""   # e.g. "DarrenWitter"
 GITHUB_REPO = ""    # e.g. "NCAA_BB"
 GITHUB_BRANCH = "main"
@@ -85,14 +83,12 @@ def fmt_num(x, nd=1):
 
 
 def pick_side_from_edge(edge_spread):
-    # Edge_Spread = Model(Home_Margin) + Spread_Home
     if edge_spread is None or (isinstance(edge_spread, float) and np.isnan(edge_spread)):
         return ""
     return "HOME" if edge_spread > 0 else "VISITOR"
 
 
 def pick_total_from_edge(edge_total):
-    # Edge_Total = Model_Total - Vegas_Total
     if edge_total is None or (isinstance(edge_total, float) and np.isnan(edge_total)):
         return ""
     return "OVER" if edge_total > 0 else "UNDER"
@@ -180,199 +176,194 @@ def build_share_card_html(spread_df, total_df, title, subtitle):
     brand_tag = "NCAA • Model Edges • Daily Card"
 
     html = f"""
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <style>
-        body {{
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-          padding: 24px;
-          background: #ffffff;
-        }}
-
-        .card {{
-          max-width: 980px;
-          margin: 0 auto;
-          border: 1px solid #e6e6e6;
-          border-radius: 18px;
-          overflow: hidden;
-          box-shadow: 0 10px 28px rgba(0,0,0,0.06);
-          background: #fff;
-        }}
-
-        .hero {{
-          position: relative;
-          padding: 22px 22px 18px 22px;
-          background: radial-gradient(1200px circle at 10% 20%, rgba(255,255,255,0.35), rgba(255,255,255,0) 40%),
-                      linear-gradient(135deg, #0f172a 0%, #111827 35%, #1f2937 100%);
-          color: #fff;
-        }}
-        .hero:before {{
-          content: "";
-          position: absolute;
-          inset: -2px;
-          background: linear-gradient(90deg, rgba(56,189,248,0.35), rgba(168,85,247,0.35), rgba(34,197,94,0.35));
-          filter: blur(22px);
-          opacity: 0.55;
-          z-index: 0;
-        }}
-        .hero-inner {{
-          position: relative;
-          z-index: 1;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 16px;
-          flex-wrap: wrap;
-        }}
-        .hero-left {{
-          display: flex;
-          align-items: center;
-          gap: 14px;
-          min-width: 260px;
-        }}
-        .lock-badge {{
-          width: 46px;
-          height: 46px;
-          border-radius: 14px;
-          display: grid;
-          place-items: center;
-          background: rgba(255,255,255,0.10);
-          border: 1px solid rgba(255,255,255,0.20);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
-          font-size: 22px;
-        }}
-        .hero-title {{
-          margin: 0;
-          font-size: 24px;
-          font-weight: 900;
-          letter-spacing: -0.4px;
-          line-height: 1.05;
-        }}
-        .hero-tag {{
-          margin: 6px 0 0 0;
-          font-size: 12px;
-          color: rgba(255,255,255,0.80);
-          font-weight: 700;
-          letter-spacing: 0.2px;
-        }}
-        .hero-right {{
-          text-align: right;
-          min-width: 240px;
-        }}
-        .pill {{
-          display: inline-block;
-          padding: 6px 12px;
-          border-radius: 999px;
-          background: rgba(255,255,255,0.10);
-          border: 1px solid rgba(255,255,255,0.18);
-          font-size: 12px;
-          font-weight: 800;
-          margin-left: 8px;
-        }}
-        .subtitle {{
-          margin: 10px 0 0 0;
-          color: rgba(255,255,255,0.78);
-          font-size: 12.5px;
-          line-height: 1.35;
-          max-width: 520px;
-          margin-left: auto;
-        }}
-
-        .content {{
-          padding: 18px 22px 18px 22px;
-        }}
-        .section {{
-          margin-top: 18px;
-        }}
-        .section h2 {{
-          font-size: 18px;
-          margin: 0 0 10px 0;
-          letter-spacing: -0.2px;
-        }}
-
-        table {{
-          width: 100%;
-          border-collapse: collapse;
-          overflow: hidden;
-          border-radius: 14px;
-        }}
-        th, td {{
-          padding: 10px 10px;
-          border-bottom: 1px solid #eee;
-          font-size: 14px;
-          vertical-align: top;
-        }}
-        th {{
-          text-align: left;
-          background: #fafafa;
-          font-weight: 900;
-          font-size: 12.5px;
-        }}
-        tr:hover td {{
-          background: #fcfcfc;
-        }}
-        .empty {{
-          padding: 12px;
-          color: #666;
-          border: 1px dashed #ddd;
-          border-radius: 14px;
-        }}
-        .footer {{
-          margin-top: 16px;
-          font-size: 12px;
-          color: #777;
-          line-height: 1.35;
-        }}
-
-        .col-match {{ width: 34%; font-weight: 800; }}
-        .col-score {{ width: 16%; }}
-        .col-vegas {{ width: 12%; }}
-        .col-edge {{ width: 12%; font-weight: 900; }}
-        .col-pick {{ width: 12%; font-weight: 900; }}
-        .col-conf {{ width: 14%; }}
-      </style>
-    </head>
-    <body>
-      <div class="card">
-        <div class="hero">
-          <div class="hero-inner">
-            <div class="hero-left">
-              <div class="lock-badge">🔒</div>
-              <div>
-                <p class="hero-title">{brand_line}</p>
-                <p class="hero-tag">{brand_tag}</p>
-              </div>
-            </div>
-
-            <div class="hero-right">
-              <span class="pill">{title}</span>
-              <span class="pill">Subscriber Card</span>
-              <p class="subtitle">{subtitle}</p>
-            </div>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      padding: 24px;
+      background: #ffffff;
+    }}
+    .card {{
+      max-width: 980px;
+      margin: 0 auto;
+      border: 1px solid #e6e6e6;
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.06);
+      background: #fff;
+    }}
+    .hero {{
+      position: relative;
+      padding: 22px 22px 18px 22px;
+      background: radial-gradient(1200px circle at 10% 20%, rgba(255,255,255,0.35), rgba(255,255,255,0) 40%),
+                  linear-gradient(135deg, #0f172a 0%, #111827 35%, #1f2937 100%);
+      color: #fff;
+    }}
+    .hero:before {{
+      content: "";
+      position: absolute;
+      inset: -2px;
+      background: linear-gradient(90deg, rgba(56,189,248,0.35), rgba(168,85,247,0.35), rgba(34,197,94,0.35));
+      filter: blur(22px);
+      opacity: 0.55;
+      z-index: 0;
+    }}
+    .hero-inner {{
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }}
+    .hero-left {{
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 260px;
+    }}
+    .lock-badge {{
+      width: 46px;
+      height: 46px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      background: rgba(255,255,255,0.10);
+      border: 1px solid rgba(255,255,255,0.20);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
+      font-size: 22px;
+    }}
+    .hero-title {{
+      margin: 0;
+      font-size: 24px;
+      font-weight: 900;
+      letter-spacing: -0.4px;
+      line-height: 1.05;
+    }}
+    .hero-tag {{
+      margin: 6px 0 0 0;
+      font-size: 12px;
+      color: rgba(255,255,255,0.80);
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }}
+    .hero-right {{
+      text-align: right;
+      min-width: 240px;
+    }}
+    .pill {{
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.10);
+      border: 1px solid rgba(255,255,255,0.18);
+      font-size: 12px;
+      font-weight: 800;
+      margin-left: 8px;
+    }}
+    .subtitle {{
+      margin: 10px 0 0 0;
+      color: rgba(255,255,255,0.78);
+      font-size: 12.5px;
+      line-height: 1.35;
+      max-width: 520px;
+      margin-left: auto;
+    }}
+    .content {{
+      padding: 18px 22px 18px 22px;
+    }}
+    .section {{
+      margin-top: 18px;
+    }}
+    .section h2 {{
+      font-size: 18px;
+      margin: 0 0 10px 0;
+      letter-spacing: -0.2px;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 14px;
+    }}
+    th, td {{
+      padding: 10px 10px;
+      border-bottom: 1px solid #eee;
+      font-size: 14px;
+      vertical-align: top;
+    }}
+    th {{
+      text-align: left;
+      background: #fafafa;
+      font-weight: 900;
+      font-size: 12.5px;
+    }}
+    tr:hover td {{
+      background: #fcfcfc;
+    }}
+    .empty {{
+      padding: 12px;
+      color: #666;
+      border: 1px dashed #ddd;
+      border-radius: 14px;
+    }}
+    .footer {{
+      margin-top: 16px;
+      font-size: 12px;
+      color: #777;
+      line-height: 1.35;
+    }}
+    .col-match {{ width: 34%; font-weight: 800; }}
+    .col-score {{ width: 16%; }}
+    .col-vegas {{ width: 12%; }}
+    .col-edge {{ width: 12%; font-weight: 900; }}
+    .col-pick {{ width: 12%; font-weight: 900; }}
+    .col-conf {{ width: 14%; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="hero">
+      <div class="hero-inner">
+        <div class="hero-left">
+          <div class="lock-badge">🔒</div>
+          <div>
+            <p class="hero-title">{brand_line}</p>
+            <p class="hero-tag">{brand_tag}</p>
           </div>
         </div>
 
-        <div class="content">
-          <div class="section">
-            <h2>Spread Plays</h2>
-            {table_html(spread_df, "spread")}
-          </div>
-
-          <div class="section">
-            <h2>Total Plays</h2>
-            {table_html(total_df, "total")}
-          </div>
-
-          <div class="footer">
-            <div><b>Notes:</b> Edges are model vs DraftKings lines/totals.</div>
-            <div>Entertainment only. If odds are missing or teams don’t map cleanly, plays may not appear.</div>
-          </div>
+        <div class="hero-right">
+          <span class="pill">{title}</span>
+          <span class="pill">Subscriber Card</span>
+          <p class="subtitle">{subtitle}</p>
         </div>
       </div>
-    </body>
-    </html>
-    """
+    </div>
+
+    <div class="content">
+      <div class="section">
+        <h2>Spread Plays</h2>
+        {table_html(spread_df, "spread")}
+      </div>
+
+      <div class="section">
+        <h2>Total Plays</h2>
+        {table_html(total_df, "total")}
+      </div>
+
+      <div class="footer">
+        <div><b>Notes:</b> Edges are model vs DraftKings lines/totals.</div>
+        <div>Entertainment only. If odds are missing or teams don’t map cleanly, plays may not appear.</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+"""
     return html
 
 
@@ -380,22 +371,13 @@ def build_share_card_html(spread_df, total_df, title, subtitle):
 # AUTO-LOADING HELPERS (repo root + optional GitHub API)
 # ============================================================
 def _extract_date_key_from_filename(name: str):
-    """
-    Parse dates in filenames like:
-      kenpom_1.10.26.xlsx
-      Schedule_01.10.2026.xlsx
-      kenpom_2026-01-10.xlsx
-    Returns a comparable tuple (year, month, day) or None.
-    """
     s = name.lower()
 
-    # 2026-01-10
     m = re.search(r"(20\d{2})[-_.](\d{1,2})[-_.](\d{1,2})", s)
     if m:
         y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
         return (y, mo, d)
 
-    # 1.10.26 or 01.10.2026
     m = re.search(r"(\d{1,2})[.](\d{1,2})[.](\d{2,4})", s)
     if m:
         mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -407,12 +389,6 @@ def _extract_date_key_from_filename(name: str):
 
 
 def find_latest_local_file(pattern: str, folder: Path) -> Path | None:
-    """
-    Finds the newest file matching pattern.
-    Uses:
-      1) date parsed from filename if possible
-      2) otherwise filesystem mtime
-    """
     files = sorted(folder.glob(pattern))
     if not files:
         return None
@@ -433,10 +409,6 @@ def find_latest_local_file(pattern: str, folder: Path) -> Path | None:
 
 
 def github_list_dir(owner: str, repo: str, path: str, branch: str, token: str | None):
-    """
-    Lists files in a GitHub directory via API.
-    If path == "" -> lists repo root.
-    """
     if requests is None:
         raise RuntimeError("requests is not installed, cannot use GitHub API fallback.")
 
@@ -468,10 +440,6 @@ def github_download_raw(download_url: str, token: str | None) -> bytes:
 
 
 def find_latest_github_file(owner: str, repo: str, folder: str, pattern_regex: str, branch: str, token: str | None):
-    """
-    Finds newest by filename date (preferred). If no date match, uses name sort.
-    Returns (name, bytes) or (None, None)
-    """
     items = github_list_dir(owner, repo, folder, branch, token)
     files = [x for x in items if isinstance(x, dict) and x.get("type") == "file"]
     files = [f for f in files if re.match(pattern_regex, f.get("name", ""), flags=re.IGNORECASE)]
@@ -537,7 +505,6 @@ def load_kenpom_excel(uploaded_file: io.BytesIO) -> pd.DataFrame:
         if col not in df.columns:
             raise ValueError(f"Expected column '{col}' not found. Found: {df.columns.tolist()}")
 
-    # --- HARD-CODED SoS COLUMNS by position (Excel letters) ---
     # Excel: N (Net SoS), P (Off SoS), R (Def SoS)
     # pandas iloc is 0-indexed: N=13, P=15, R=17
     try:
@@ -559,10 +526,8 @@ def load_kenpom_excel(uploaded_file: io.BytesIO) -> pd.DataFrame:
         "SOS_DEF": sos_def,
     })
 
-    # --- Blended SoS (stable, low variance) ---
     out["SOS_BLEND"] = (0.50 * out["SOS_NET"]) + (0.25 * out["SOS_OFF"]) + (0.25 * out["SOS_DEF"])
 
-    # Derived metrics (tagging only; does NOT alter predictions)
     out["NetRtg"] = out["ORtg"] - out["DRtg"]
     tags = out.apply(lambda r: tag_team_style(r["AdjT"], r["NetRtg"]), axis=1)
     out["In_Trapezoid"] = [t[0] for t in tags]
@@ -669,28 +634,21 @@ def build_kp_lookup(df_kp: pd.DataFrame):
 
 
 def map_to_kenpom(team_name: str, kp_set: set[str], norm_to_team: dict, fuzzy_cutoff: float = 0.86):
-    """
-    Returns: (mapped_name or None, score 0..1, method)
-    """
     original = str(team_name).strip()
     if not original or original.lower() == "nan":
         return None, 0.0, "empty"
 
-    # exact
     if original in kp_set:
         return original, 1.0, "exact"
 
-    # alias
     alias_key = original.lower()
     if alias_key in ALIAS_MAP and ALIAS_MAP[alias_key] in kp_set:
         return ALIAS_MAP[alias_key], 1.0, "alias"
 
-    # normalized exact
     n = normalize_team_name(original)
     if n in norm_to_team:
         return norm_to_team[n], 0.98, "normalized"
 
-    # fuzzy on normalized keys
     norm_keys = list(norm_to_team.keys())
     best = difflib.get_close_matches(n, norm_keys, n=1, cutoff=fuzzy_cutoff)
     if best:
@@ -783,26 +741,21 @@ def sos_margin_adjustment_pts(
     sos_away: float,
     possessions: float,
     sos_weight: float,
-    sos_share: float = 0.80,       # was 0.40 (2×); now doubled again
-    max_margin_pts: float = 20.0,  # was 10.0 (2×); now doubled again
+    sos_share: float = 0.80,
+    max_margin_pts: float = 20.0,
 ) -> float:
-    """
-    Returns a margin-only adjustment in points applied to (home - away).
-    Uses blended SoS differential (home - away), scaled by sos_weight.
-    Capped to keep it controlled. If SoS missing, returns 0.
-    """
     if sos_weight is None or np.isnan(sos_weight) or sos_weight <= 0:
         return 0.0
     if any(pd.isna(x) for x in [sos_home, sos_away, possessions]):
         return 0.0
 
-    sos_diff = float(sos_home) - float(sos_away)  # home - away
+    sos_diff = float(sos_home) - float(sos_away)
     adj_pts = sos_diff * sos_share * float(sos_weight) * (float(possessions) / 100.0)
     return float(np.clip(adj_pts, -max_margin_pts, max_margin_pts))
 
 
 # -----------------------------
-# Core prediction logic (spreadsheet structure)
+# Core prediction logic
 # -----------------------------
 def predict_matchup(
     team_away: str,
@@ -833,7 +786,6 @@ def predict_matchup(
     away_pts = away_pts_neutral
     home_pts = home_pts_neutral + home_edge_points
 
-    # --- HARD-CODED SoS (blended) : margin-only adjustment ---
     sos_home = home_row.get("SOS_BLEND", np.nan)
     sos_away = away_row.get("SOS_BLEND", np.nan)
 
@@ -844,7 +796,6 @@ def predict_matchup(
         sos_weight=sos_weight,
     )
 
-    # Split margin-only adjustment so total stays stable
     home_pts += (margin_adj_pts / 2.0)
     away_pts -= (margin_adj_pts / 2.0)
 
@@ -877,7 +828,7 @@ def run_schedule(
     fuzzy_cutoff: float,
     sos_weight: float,
 ):
-    kp_teams, kp_set, norm_to_team = build_kp_lookup(df_kp)
+    _, kp_set, norm_to_team = build_kp_lookup(df_kp)
 
     results_rows = []
     for _, r in schedule_df.iterrows():
@@ -885,7 +836,6 @@ def run_schedule(
         home_raw = r["Home"]
         base = r.to_dict()
 
-        # --- Map schedule team names to KenPom team names ---
         v_map, v_score, v_method = map_to_kenpom(visitor_raw, kp_set, norm_to_team, fuzzy_cutoff=fuzzy_cutoff)
         h_map, h_score, h_method = map_to_kenpom(home_raw, kp_set, norm_to_team, fuzzy_cutoff=fuzzy_cutoff)
 
@@ -896,7 +846,6 @@ def run_schedule(
         base["Visitor_MapMethod"] = v_method
         base["Home_MapMethod"] = h_method
 
-        # Parse odds regardless (so unmapped rows still show vegas)
         odds_text = base.get("Odds by draft kings", np.nan)
         dk = parse_dk_odds(odds_text)
         base.update(dk)
@@ -931,7 +880,6 @@ def run_schedule(
 
         base["Map_Status"] = "OK"
 
-        # --- Style tags (no impact on calculations) ---
         try:
             v_style = df_kp.loc[df_kp["Team"] == v_map, ["NetRtg", "AdjT", "In_Trapezoid", "Fraud", "Style_Tag"]].iloc[0]
             h_style = df_kp.loc[df_kp["Team"] == h_map, ["NetRtg", "AdjT", "In_Trapezoid", "Fraud", "Style_Tag"]].iloc[0]
@@ -953,7 +901,6 @@ def run_schedule(
             base["Visitor_Tag"] = ""
             base["Home_Tag"] = ""
 
-        # --- Predict using mapped names ---
         pred = predict_matchup(
             team_away=v_map,
             team_home=h_map,
@@ -966,13 +913,11 @@ def run_schedule(
         )
         base.update(pred)
 
-        # Edge_Spread = Model(Home_Margin) + Spread_Home
         if isinstance(base.get("Spread_Home"), (int, float)) and not np.isnan(base["Spread_Home"]):
             base["Edge_Spread"] = float(np.round(base["Home_Margin"] + base["Spread_Home"], 2))
         else:
             base["Edge_Spread"] = np.nan
 
-        # Edge_Total = Model(Total) - Vegas(O/U)
         if isinstance(base.get("DK_Total"), (int, float)) and not np.isnan(base["DK_Total"]):
             base["Edge_Total"] = float(np.round(base["Total"] - base["DK_Total"], 2))
         else:
@@ -1008,97 +953,95 @@ def run_schedule(
 
 
 # =============================
-# Schedule Cards (Option 1)
+# Schedule Cards (Option 1) — FIXED (dedent/strip so HTML renders)
 # =============================
 def inject_cards_css():
-    st.markdown(
-        """
-        <style>
-          .sig-cards-wrap { margin-top: 6px; }
-          .sig-card {
-            border: 1px solid rgba(0,0,0,0.08);
-            border-radius: 16px;
-            padding: 14px 14px 12px 14px;
-            background: #ffffff;
-            box-shadow: 0 10px 26px rgba(0,0,0,0.05);
-          }
-          .sig-card-top {
-            display:flex;
-            align-items:flex-start;
-            justify-content:space-between;
-            gap:10px;
-            margin-bottom: 8px;
-          }
-          .sig-matchup {
-            font-weight: 900;
-            letter-spacing: -0.2px;
-            font-size: 15px;
-            line-height: 1.2;
-          }
-          .sig-tags {
-            margin-top: 4px;
-            font-size: 12px;
-            opacity: 0.85;
-            font-weight: 800;
-          }
-          .sig-pill {
-            display:inline-block;
-            padding: 5px 10px;
-            border-radius: 999px;
-            border: 1px solid rgba(0,0,0,0.10);
-            background: rgba(0,0,0,0.03);
-            font-weight: 900;
-            font-size: 12px;
-            margin-left: 6px;
-            white-space: nowrap;
-          }
-          .sig-row {
-            display:flex;
-            gap:10px;
-            flex-wrap: wrap;
-            margin-top: 8px;
-          }
-          .sig-kv {
-            flex: 1 1 160px;
-            border-radius: 12px;
-            padding: 10px 10px;
-            border: 1px solid rgba(0,0,0,0.06);
-            background: rgba(0,0,0,0.02);
-          }
-          .sig-k {
-            font-size: 11px;
-            font-weight: 900;
-            opacity: 0.70;
-            margin-bottom: 4px;
-            text-transform: uppercase;
-            letter-spacing: 0.4px;
-          }
-          .sig-v {
-            font-size: 14px;
-            font-weight: 900;
-            letter-spacing: -0.2px;
-          }
-          .sig-subv {
-            margin-top: 3px;
-            font-size: 12px;
-            font-weight: 800;
-            opacity: 0.85;
-          }
-          .sig-badge {
-            display:inline-block;
-            padding: 3px 8px;
-            border-radius: 999px;
-            font-size: 11px;
-            font-weight: 900;
-            border: 1px solid rgba(0,0,0,0.10);
-            background: rgba(0,0,0,0.03);
-            margin-right: 6px;
-            margin-top: 6px;
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    css = """
+<style>
+  .sig-cards-wrap { margin-top: 6px; }
+  .sig-card {
+    border: 1px solid rgba(0,0,0,0.08);
+    border-radius: 16px;
+    padding: 14px 14px 12px 14px;
+    background: #ffffff;
+    box-shadow: 0 10px 26px rgba(0,0,0,0.05);
+  }
+  .sig-card-top {
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:10px;
+    margin-bottom: 8px;
+  }
+  .sig-matchup {
+    font-weight: 900;
+    letter-spacing: -0.2px;
+    font-size: 15px;
+    line-height: 1.2;
+  }
+  .sig-tags {
+    margin-top: 4px;
+    font-size: 12px;
+    opacity: 0.85;
+    font-weight: 800;
+  }
+  .sig-pill {
+    display:inline-block;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(0,0,0,0.10);
+    background: rgba(0,0,0,0.03);
+    font-weight: 900;
+    font-size: 12px;
+    margin-left: 6px;
+    white-space: nowrap;
+  }
+  .sig-row {
+    display:flex;
+    gap:10px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+  .sig-kv {
+    flex: 1 1 160px;
+    border-radius: 12px;
+    padding: 10px 10px;
+    border: 1px solid rgba(0,0,0,0.06);
+    background: rgba(0,0,0,0.02);
+  }
+  .sig-k {
+    font-size: 11px;
+    font-weight: 900;
+    opacity: 0.70;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .sig-v {
+    font-size: 14px;
+    font-weight: 900;
+    letter-spacing: -0.2px;
+  }
+  .sig-subv {
+    margin-top: 3px;
+    font-size: 12px;
+    font-weight: 800;
+    opacity: 0.85;
+  }
+  .sig-badge {
+    display:inline-block;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 900;
+    border: 1px solid rgba(0,0,0,0.10);
+    background: rgba(0,0,0,0.03);
+    margin-right: 6px;
+    margin-top: 6px;
+  }
+</style>
+"""
+    st.markdown(textwrap.dedent(css).strip(), unsafe_allow_html=True)
 
 
 def _safe_str(x) -> str:
@@ -1117,32 +1060,23 @@ def render_schedule_cards(
     require_full_data: bool,
     max_cards: int,
 ):
-    """
-    Card view for schedule results.
-    - show_only_flagged: only show Spread_Play or Total_Play
-    - require_full_data: only show rows with Map_Status OK + Preds present + at least one vegas field present
-    """
     if df is None or len(df) == 0:
         st.info("No schedule results to display.")
         return
 
     df2 = df.copy()
 
-    # Only mapped
     if "Map_Status" in df2.columns:
         df2 = df2[df2["Map_Status"].astype(str).str.upper().eq("OK")]
 
-    # Require "full-ish" data
     if require_full_data:
         for col in ["Pred_Away", "Pred_Home"]:
             if col in df2.columns:
                 df2 = df2[df2[col].notna()]
-        # Need at least one of spread/total to be present for a useful card
         has_spread = ("Spread_Home" in df2.columns) and df2["Spread_Home"].notna()
         has_total = ("DK_Total" in df2.columns) and df2["DK_Total"].notna()
         df2 = df2[has_spread | has_total]
 
-    # Only flagged plays
     if show_only_flagged:
         sp_ok = ("Spread_Play" in df2.columns) and df2["Spread_Play"].fillna(False)
         tot_ok = ("Total_Play" in df2.columns) and df2["Total_Play"].fillna(False)
@@ -1152,7 +1086,6 @@ def render_schedule_cards(
         st.warning("No games match the current filters (mapped/full-data/flagged).")
         return
 
-    # Sort by "best edge" (max of abs spread/total edges)
     def _row_best_abs(r):
         es = r.get("Edge_Spread", np.nan)
         et = r.get("Edge_Total", np.nan)
@@ -1162,12 +1095,10 @@ def render_schedule_cards(
 
     df2["_best_abs"] = df2.apply(_row_best_abs, axis=1)
     df2 = df2.sort_values("_best_abs", ascending=False).drop(columns=["_best_abs"])
-
     df2 = df2.head(int(max_cards))
 
     inject_cards_css()
 
-    # Render in 2 columns (nice on desktop; still stacks on mobile)
     cols = st.columns(2)
     col_idx = 0
 
@@ -1188,13 +1119,11 @@ def render_schedule_cards(
         pred_home = r.get("Pred_Home", np.nan)
         score_txt = f"{fmt_num(pred_away,1)} - {fmt_num(pred_home,1)}"
 
-        # Vegas
         spread_home = r.get("Spread_Home", np.nan)
         dk_total = r.get("DK_Total", np.nan)
         vegas_spread_txt = fmt_num(spread_home, 1) if pd.notna(spread_home) else "—"
         vegas_total_txt = fmt_num(dk_total, 1) if pd.notna(dk_total) else "—"
 
-        # Edges + picks
         edge_spread = r.get("Edge_Spread", np.nan)
         edge_total = r.get("Edge_Total", np.nan)
 
@@ -1202,54 +1131,52 @@ def render_schedule_cards(
         total_pick = pick_total_from_edge(edge_total) if pd.notna(edge_total) else ""
 
         spread_conf = confidence_label(abs(edge_spread)) if pd.notna(edge_spread) else "—"
-        total_conf = confidence_label(abs(edge_total)) if pd.notna(edge_total) else "—"
 
-        # Badges
         badges = []
         if bool(r.get("Spread_Play", False)):
             badges.append("✅ Spread Play")
         if bool(r.get("Total_Play", False)):
             badges.append("✅ Total Play")
 
-        # Build HTML
         html = f"""
-        <div class="sig-card">
-          <div class="sig-card-top">
-            <div>
-              <div class="sig-matchup">{matchup}</div>
-              {"<div class='sig-tags'>" + tag_txt + "</div>" if tag_txt else ""}
-            </div>
-            <div>
-              <span class="sig-pill">{spread_conf if bool(r.get("Spread_Play", False)) else "Subscriber Card"}</span>
-            </div>
-          </div>
+<div class="sig-card">
+  <div class="sig-card-top">
+    <div>
+      <div class="sig-matchup">{matchup}</div>
+      {"<div class='sig-tags'>" + tag_txt + "</div>" if tag_txt else ""}
+    </div>
+    <div>
+      <span class="sig-pill">{spread_conf if bool(r.get("Spread_Play", False)) else "Subscriber Card"}</span>
+    </div>
+  </div>
 
-          <div class="sig-row">
-            <div class="sig-kv">
-              <div class="sig-k">Model Score</div>
-              <div class="sig-v">{score_txt}</div>
-              <div class="sig-subv">Home Margin: {fmt_num(r.get("Home_Margin", np.nan),1)} • Total: {fmt_num(r.get("Total", np.nan),1)}</div>
-            </div>
+  <div class="sig-row">
+    <div class="sig-kv">
+      <div class="sig-k">Model Score</div>
+      <div class="sig-v">{score_txt}</div>
+      <div class="sig-subv">Home Margin: {fmt_num(r.get("Home_Margin", np.nan),1)} • Total: {fmt_num(r.get("Total", np.nan),1)}</div>
+    </div>
 
-            <div class="sig-kv">
-              <div class="sig-k">Spread</div>
-              <div class="sig-v">Vegas: {vegas_spread_txt}</div>
-              <div class="sig-subv">Edge: {fmt_num(edge_spread,2) if pd.notna(edge_spread) else "—"} • Pick: {side_pick or "—"}</div>
-            </div>
+    <div class="sig-kv">
+      <div class="sig-k">Spread</div>
+      <div class="sig-v">Vegas: {vegas_spread_txt}</div>
+      <div class="sig-subv">Edge: {fmt_num(edge_spread,2) if pd.notna(edge_spread) else "—"} • Pick: {side_pick or "—"}</div>
+    </div>
 
-            <div class="sig-kv">
-              <div class="sig-k">Total</div>
-              <div class="sig-v">Vegas: {vegas_total_txt}</div>
-              <div class="sig-subv">Edge: {fmt_num(edge_total,2) if pd.notna(edge_total) else "—"} • Pick: {total_pick or "—"}</div>
-            </div>
-          </div>
+    <div class="sig-kv">
+      <div class="sig-k">Total</div>
+      <div class="sig-v">Vegas: {vegas_total_txt}</div>
+      <div class="sig-subv">Edge: {fmt_num(edge_total,2) if pd.notna(edge_total) else "—"} • Pick: {total_pick or "—"}</div>
+    </div>
+  </div>
 
-          <div style="margin-top:8px;">
-            {"".join([f"<span class='sig-badge'>{b}</span>" for b in badges]) if badges else "<span class='sig-badge'>Mapped • Full data</span>"}
-            <span class="sig-badge">Thresholds: Spread ≥ {fmt_num(spread_edge_threshold,1)} • Total ≥ {fmt_num(total_edge_threshold,1)}</span>
-          </div>
-        </div>
-        """
+  <div style="margin-top:8px;">
+    {"".join([f"<span class='sig-badge'>{b}</span>" for b in badges]) if badges else "<span class='sig-badge'>Mapped • Full data</span>"}
+    <span class="sig-badge">Thresholds: Spread ≥ {fmt_num(spread_edge_threshold,1)} • Total ≥ {fmt_num(total_edge_threshold,1)}</span>
+  </div>
+</div>
+"""
+        html = textwrap.dedent(html).strip()
 
         with cols[col_idx]:
             st.markdown(html, unsafe_allow_html=True)
@@ -1258,48 +1185,32 @@ def render_schedule_cards(
 
 
 # -----------------------------
-# Streamlit App (repo root auto-load)
+# Streamlit App
 # -----------------------------
 def main():
     st.set_page_config(page_title="SignalAI NCAA Predictor", layout="wide")
 
-    # ===== Header with Logo =====
     h1, h2 = st.columns([1, 5], vertical_alignment="center")
     with h1:
         if LOGO_PATH.exists():
             st.image(str(LOGO_PATH), width=110)
-        else:
-            # If the logo isn't found, don't show anything (keeps header clean)
-            # You can temporarily uncomment the next line for troubleshooting:
-            # st.warning(f"Logo not found at: {LOGO_PATH}")
-            pass
     with h2:
         st.title("SignalAI NCAA Predictor")
 
     st.sidebar.header("Data source (Repo Root)")
 
-    # Auto-load from repo root
     kp_path = find_latest_local_file("kenpom_*.xls*", REPO_ROOT)
     sched_path = find_latest_local_file("Schedule_*.xls*", REPO_ROOT)
 
-    auto_kp_bytes = None
-    auto_sched_bytes = None
-    auto_kp_label = None
-    auto_sched_label = None
+    auto_kp_bytes = kp_path.read_bytes() if kp_path and kp_path.exists() else None
+    auto_sched_bytes = sched_path.read_bytes() if sched_path and sched_path.exists() else None
+    auto_kp_label = f"Local (repo root): {kp_path.name}" if kp_path and kp_path.exists() else None
+    auto_sched_label = f"Local (repo root): {sched_path.name}" if sched_path and sched_path.exists() else None
 
-    if kp_path and kp_path.exists():
-        auto_kp_bytes = kp_path.read_bytes()
-        auto_kp_label = f"Local (repo root): {kp_path.name}"
-    if sched_path and sched_path.exists():
-        auto_sched_bytes = sched_path.read_bytes()
-        auto_sched_label = f"Local (repo root): {sched_path.name}"
-
-    # Optional GitHub fallback
     use_github_fallback = st.sidebar.toggle(
         "Enable GitHub fallback (if local files missing)",
         value=False,
-        help="Uses GitHub API to find and download the newest Excel files from the repo root. "
-             "Useful for private repos or if files aren't present in the build image."
+        help="Uses GitHub API to find and download the newest Excel files from the repo root."
     )
 
     if use_github_fallback and (auto_kp_bytes is None or auto_sched_bytes is None):
@@ -1318,7 +1229,7 @@ def main():
                         name, b = find_latest_github_file(
                             owner=GITHUB_OWNER,
                             repo=GITHUB_REPO,
-                            folder=GITHUB_DATA_DIR,  # "" => repo root
+                            folder=GITHUB_DATA_DIR,
                             pattern_regex=r"^kenpom_.*\.xls[x]?$",
                             branch=GITHUB_BRANCH,
                             token=gh_token,
@@ -1331,7 +1242,7 @@ def main():
                         name, b = find_latest_github_file(
                             owner=GITHUB_OWNER,
                             repo=GITHUB_REPO,
-                            folder=GITHUB_DATA_DIR,  # "" => repo root
+                            folder=GITHUB_DATA_DIR,
                             pattern_regex=r"^Schedule_.*\.xls[x]?$",
                             branch=GITHUB_BRANCH,
                             token=gh_token,
@@ -1342,7 +1253,6 @@ def main():
                 except Exception as e:
                     st.sidebar.error(f"GitHub fallback failed: {e}")
 
-    # Manual upload override (still available)
     st.sidebar.markdown("---")
     st.sidebar.caption("Auto-load is used if found. Upload overrides auto-load.")
     kp_uploaded = st.sidebar.file_uploader(
@@ -1358,7 +1268,6 @@ def main():
         key="sched_upload_override",
     )
 
-    # Decide final KenPom bytes
     if kp_uploaded is not None:
         kp_bytes = kp_uploaded.getvalue()
         kp_source = "Manual upload"
@@ -1369,15 +1278,9 @@ def main():
     if kp_bytes is None:
         st.info(
             "No KenPom file found in repo root.\n\n"
-            "Fix: commit a file named like `kenpom_1.10.26.xlsx` into the repo root (same folder as app.py),\n"
-            "or upload manually in the sidebar."
+            "Fix: commit `kenpom_*.xlsx` into the repo root (same folder as app.py), or upload manually."
         )
         return
-
-    # ------------------------------------------------------------
-    # (COMMENTED OUT) Status text you said you don't want shown
-    # ------------------------------------------------------------
-    # st.caption(f"KenPom source: **{kp_source}**")
 
     # Sidebar controls
     st.sidebar.markdown("---")
@@ -1396,8 +1299,7 @@ def main():
     sos_weight = st.sidebar.slider(
         "SoS weight (0 = off, 1 = max effect)",
         0.0, 1.0, 0.20, 0.05,
-        help="Applies a capped margin-only adjustment using SoS differential from KenPom columns "
-             "N=Net SoS, P=Off SoS, R=Def SoS. This build is ~4× the original impact."
+        help="Applies a capped margin-only adjustment using SoS differential from KenPom columns N/P/R."
     )
 
     st.sidebar.markdown("---")
@@ -1407,32 +1309,14 @@ def main():
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Team Mapping")
-    fuzzy_cutoff = st.sidebar.slider(
-        "Fuzzy match strictness (higher = stricter)",
-        0.70, 0.95, 0.86, 0.01
-    )
+    fuzzy_cutoff = st.sidebar.slider("Fuzzy match strictness (higher = stricter)", 0.70, 0.95, 0.86, 0.01)
     st.sidebar.caption("If teams fail to map, lower strictness slightly or add to ALIAS_MAP.")
 
-    # Load KenPom
     try:
         df_kp = load_kenpom_excel(io.BytesIO(kp_bytes))
     except Exception as e:
         st.error(f"Error loading KenPom file: {e}")
         st.stop()
-
-    sos_ok = int(df_kp["SOS_BLEND"].notna().sum())
-    if sos_ok == 0:
-        st.warning(
-            "SoS_BLEND is missing for all teams. "
-            "Your hardcoded columns (N/P/R) may not exist in this upload after the header row. "
-            "SoS weight will have no effect."
-        )
-    else:
-        # ------------------------------------------------------------
-        # (COMMENTED OUT) Status text you said you don't want shown
-        # ------------------------------------------------------------
-        # st.caption(f"SoS loaded for {sos_ok} teams (SOS_BLEND from columns N/P/R).")
-        pass
 
     mode = st.radio("Select evaluation mode:", ["Single matchup", "Run full daily schedule"], horizontal=True)
 
@@ -1466,40 +1350,21 @@ def main():
         m3.metric("Total Points", f"{result['Total']:.1f}")
         m4.metric("Home Margin (Home - Away)", f"{result['Home_Margin']:.1f}")
 
-        # ------------------------------------------------------------
-        # SoS DEBUG (COMMENTED OUT) — kept for reference, not shown
-        # ------------------------------------------------------------
-        # with st.expander("SoS modifier (debug)"):
-        #     st.write({
-        #         "SoS_Away (blend)": result.get("SoS_Away", np.nan),
-        #         "SoS_Home (blend)": result.get("SoS_Home", np.nan),
-        #         "SoS_MarginAdj_Pts (home - away)": result.get("SoS_MarginAdj_Pts", np.nan),
-        #         "SoS_weight": sos_weight,
-        #         "Note": "Margin-only adjustment is split: +adj/2 to home and -adj/2 to away. Totals stay stable."
-        #     })
-
         with st.expander("KenPom data preview"):
             st.dataframe(df_kp.head(25), use_container_width=True)
 
     else:
         st.markdown("## Run Full Daily Schedule")
 
-        # Schedule bytes: manual override wins, else repo root auto-load
         if sched_uploaded is not None:
             sched_bytes = sched_uploaded.getvalue()
-            sched_source = "Manual upload"
         else:
             sched_bytes = auto_sched_bytes
-            sched_source = auto_sched_label or "Not found"
-
-        # (Optional) If you also want to hide schedule source text, keep it commented:
-        # st.caption(f"Schedule source: **{sched_source}**")
 
         if sched_bytes is None:
             st.info(
                 "No schedule file found in repo root.\n\n"
-                "Fix: commit a file named like `Schedule_1.10.26.xlsx` into the repo root (same folder as app.py),\n"
-                "or upload manually in the sidebar."
+                "Fix: commit `Schedule_*.xlsx` into the repo root (same folder as app.py), or upload manually."
             )
             return
 
@@ -1513,13 +1378,12 @@ def main():
         with st.expander("Schedule preview"):
             st.dataframe(schedule_df.head(50), use_container_width=True)
 
-        # Schedule display options
         st.markdown("### Display Options")
         o1, o2, o3 = st.columns(3)
         with o1:
-            show_only_flagged = st.toggle("Show only flagged plays", value=True, help="Shows only Spread_Play or Total_Play")
+            show_only_flagged = st.toggle("Show only flagged plays", value=True)
         with o2:
-            require_full_data = st.toggle("Require full data", value=True, help="Only show mapped games with model preds and at least spread/total")
+            require_full_data = st.toggle("Require full data", value=True)
         with o3:
             max_cards = st.number_input("Max cards", min_value=4, max_value=200, value=40, step=4)
 
@@ -1537,7 +1401,6 @@ def main():
                 sos_weight=sos_weight,
             )
 
-            # ----- NEW: Card view -----
             st.markdown("### Today’s Board (Cards)")
             render_schedule_cards(
                 df=results_df,
@@ -1548,7 +1411,6 @@ def main():
                 max_cards=max_cards,
             )
 
-            # Keep everything you already had
             st.markdown("### Full Results (mapping + edges + flags)")
             st.dataframe(results_df, use_container_width=True)
 
