@@ -1216,13 +1216,13 @@ def main():
         m3.metric("Total Points", f"{result['Total']:.1f}")
         m4.metric("Home Margin (Home - Away)", f"{result['Home_Margin']:.1f}")
 
-        # with st.expander("SoS modifier (debug)"):
-            # st.write({
-                # "SoS_Away (blend)": result.get("SoS_Away", np.nan),
-                # "SoS_Home (blend)": result.get("SoS_Home", np.nan),
-                # "SoS_MarginAdj_Pts (home - away)": result.get("SoS_MarginAdj_Pts", np.nan),
-                # "SoS_weight": sos_weight,
-                # "Note": "Margin-only adjustment is split: +adj/2 to home and -adj/2 to away. Totals stay stable."
+        with st.expander("SoS modifier (debug)"):
+            st.write({
+                "SoS_Away (blend)": result.get("SoS_Away", np.nan),
+                "SoS_Home (blend)": result.get("SoS_Home", np.nan),
+                "SoS_MarginAdj_Pts (home - away)": result.get("SoS_MarginAdj_Pts", np.nan),
+                "SoS_weight": sos_weight,
+                "Note": "Margin-only adjustment is split: +adj/2 to home and -adj/2 to away. Totals stay stable."
             })
 
         with st.expander("KenPom data preview"):
@@ -1287,4 +1287,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
