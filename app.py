@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 # Optional (only needed if you enable GitHub fallback)
 try:
@@ -23,6 +24,7 @@ REPO_ROOT = Path(__file__).parent
 LOGO_FILENAME = "SignalAI_Logo.png"
 LOGO_PATH = REPO_ROOT / LOGO_FILENAME
 
+# Optional GitHub fallback (if you want it):
 GITHUB_OWNER = ""   # e.g. "DarrenWitter"
 GITHUB_REPO = ""    # e.g. "NCAA_BB"
 GITHUB_BRANCH = "main"
@@ -105,7 +107,7 @@ def confidence_label(edge_abs):
 
 
 # =============================
-# Share-card helpers (HTML)
+# Share-card helpers (HTML) — kept as-is
 # =============================
 def build_share_card_html(spread_df, total_df, title, subtitle):
     """
@@ -505,6 +507,7 @@ def load_kenpom_excel(uploaded_file: io.BytesIO) -> pd.DataFrame:
         if col not in df.columns:
             raise ValueError(f"Expected column '{col}' not found. Found: {df.columns.tolist()}")
 
+    # --- HARD-CODED SoS COLUMNS by position (Excel letters) ---
     # Excel: N (Net SoS), P (Off SoS), R (Def SoS)
     # pandas iloc is 0-indexed: N=13, P=15, R=17
     try:
@@ -526,6 +529,7 @@ def load_kenpom_excel(uploaded_file: io.BytesIO) -> pd.DataFrame:
         "SOS_DEF": sos_def,
     })
 
+    # --- Blended SoS (stable, low variance) ---
     out["SOS_BLEND"] = (0.50 * out["SOS_NET"]) + (0.25 * out["SOS_OFF"]) + (0.25 * out["SOS_DEF"])
 
     out["NetRtg"] = out["ORtg"] - out["DRtg"]
@@ -734,7 +738,7 @@ def derive_home_spread(visitor: str, home: str, dk_fav: str, dk_line_fav: float)
 
 
 # -----------------------------
-# SoS modifier (margin-only) — DOUBLE current effect (4× vs original)
+# SoS modifier (margin-only) — 4× impact
 # -----------------------------
 def sos_margin_adjustment_pts(
     sos_home: float,
@@ -953,12 +957,11 @@ def run_schedule(
 
 
 # =============================
-# Schedule Cards (Option 1) — FIXED (dedent/strip so HTML renders)
+# Schedule Cards (Option 1) — RENDER VIA components.html (fixes iPad/Cloud)
 # =============================
-def inject_cards_css():
-    css = """
+SIG_CARDS_CSS = """
 <style>
-  .sig-cards-wrap { margin-top: 6px; }
+  body { margin: 0; padding: 0; background: transparent; }
   .sig-card {
     border: 1px solid rgba(0,0,0,0.08);
     border-radius: 16px;
@@ -1041,7 +1044,6 @@ def inject_cards_css():
   }
 </style>
 """
-    st.markdown(textwrap.dedent(css).strip(), unsafe_allow_html=True)
 
 
 def _safe_str(x) -> str:
@@ -1050,6 +1052,22 @@ def _safe_str(x) -> str:
     if isinstance(x, float) and np.isnan(x):
         return ""
     return str(x)
+
+
+def _render_html_component(html: str, height: int = 260):
+    doc = f"""
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    {SIG_CARDS_CSS}
+  </head>
+  <body>
+    {html}
+  </body>
+</html>
+"""
+    components.html(textwrap.dedent(doc).strip(), height=height, scrolling=False)
 
 
 def render_schedule_cards(
@@ -1096,8 +1114,6 @@ def render_schedule_cards(
     df2["_best_abs"] = df2.apply(_row_best_abs, axis=1)
     df2 = df2.sort_values("_best_abs", ascending=False).drop(columns=["_best_abs"])
     df2 = df2.head(int(max_cards))
-
-    inject_cards_css()
 
     cols = st.columns(2)
     col_idx = 0
@@ -1179,7 +1195,8 @@ def render_schedule_cards(
         html = textwrap.dedent(html).strip()
 
         with cols[col_idx]:
-            st.markdown(html, unsafe_allow_html=True)
+            # Height can be tuned; this works well on iPad
+            _render_html_component(html, height=270)
 
         col_idx = 1 - col_idx
 
@@ -1202,10 +1219,17 @@ def main():
     kp_path = find_latest_local_file("kenpom_*.xls*", REPO_ROOT)
     sched_path = find_latest_local_file("Schedule_*.xls*", REPO_ROOT)
 
-    auto_kp_bytes = kp_path.read_bytes() if kp_path and kp_path.exists() else None
-    auto_sched_bytes = sched_path.read_bytes() if sched_path and sched_path.exists() else None
-    auto_kp_label = f"Local (repo root): {kp_path.name}" if kp_path and kp_path.exists() else None
-    auto_sched_label = f"Local (repo root): {sched_path.name}" if sched_path and sched_path.exists() else None
+    auto_kp_bytes = None
+    auto_sched_bytes = None
+    auto_kp_label = None
+    auto_sched_label = None
+
+    if kp_path and kp_path.exists():
+        auto_kp_bytes = kp_path.read_bytes()
+        auto_kp_label = f"Local (repo root): {kp_path.name}"
+    if sched_path and sched_path.exists():
+        auto_sched_bytes = sched_path.read_bytes()
+        auto_sched_label = f"Local (repo root): {sched_path.name}"
 
     use_github_fallback = st.sidebar.toggle(
         "Enable GitHub fallback (if local files missing)",
@@ -1270,10 +1294,8 @@ def main():
 
     if kp_uploaded is not None:
         kp_bytes = kp_uploaded.getvalue()
-        kp_source = "Manual upload"
     else:
         kp_bytes = auto_kp_bytes
-        kp_source = auto_kp_label or "Not found"
 
     if kp_bytes is None:
         st.info(
@@ -1309,9 +1331,13 @@ def main():
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Team Mapping")
-    fuzzy_cutoff = st.sidebar.slider("Fuzzy match strictness (higher = stricter)", 0.70, 0.95, 0.86, 0.01)
+    fuzzy_cutoff = st.sidebar.slider(
+        "Fuzzy match strictness (higher = stricter)",
+        0.70, 0.95, 0.86, 0.01
+    )
     st.sidebar.caption("If teams fail to map, lower strictness slightly or add to ALIAS_MAP.")
 
+    # Load KenPom
     try:
         df_kp = load_kenpom_excel(io.BytesIO(kp_bytes))
     except Exception as e:
