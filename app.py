@@ -120,8 +120,8 @@ def build_share_card_html(spread_df, total_df, title, subtitle):
 
         rows = []
         for _, r in df.iterrows():
-            vtag = safe_get(r, 'Visitor_Tag')
-            htag = safe_get(r, 'Home_Tag')
+            vtag = safe_get(r, "Visitor_Tag")
+            htag = safe_get(r, "Home_Tag")
             tag_txt = ""
             if isinstance(vtag, str) and vtag.strip():
                 tag_txt += f" {vtag.strip()}"
@@ -779,7 +779,7 @@ def sos_margin_adjustment_pts(
     sos_away: float,
     possessions: float,
     sos_weight: float,
-    sos_share: float = 0.80,      # was 0.40 (2×); now doubled again
+    sos_share: float = 0.80,       # was 0.40 (2×); now doubled again
     max_margin_pts: float = 20.0,  # was 10.0 (2×); now doubled again
 ) -> float:
     """
@@ -1008,23 +1008,7 @@ def run_schedule(
 # -----------------------------
 def main():
     st.set_page_config(page_title="SignalAI NCAA Predictor", layout="wide")
-
-    # ============================================================
-    # STEP 3 HEADER: LOGO + TITLE ROW (repo root image)
-    # ============================================================
-    logo_path = REPO_ROOT / "SignalAI_Logo.png"
-
-    col1, col2 = st.columns([1, 6])
-    with col1:
-        if logo_path.exists():
-            st.image(str(logo_path), width=120)
-        else:
-            # Safe fallback (won't crash the app)
-            st.write("")
-
-    with col2:
-        st.markdown("## **SignalAI NCAA Predictor**")
-        st.caption("AI-powered NCAA model edges")
+    st.title("SignalAI NCAA Predictor")
 
     st.sidebar.header("Data source (Repo Root)")
 
@@ -1124,10 +1108,7 @@ def main():
         )
         return
 
-    # ------------------------------------------------------------
-    # COMMENTED OUT PER YOUR REQUEST (keep in code, don't show UI)
-    # st.caption(f"KenPom source: **{kp_source}**")
-    # ------------------------------------------------------------
+    st.caption(f"KenPom source: **{kp_source}**")
 
     # Sidebar controls
     st.sidebar.markdown("---")
@@ -1178,11 +1159,7 @@ def main():
             "SoS weight will have no effect."
         )
     else:
-        # ------------------------------------------------------------
-        # COMMENTED OUT PER YOUR REQUEST (keep in code, don't show UI)
-        # st.caption(f"SoS loaded for {sos_ok} teams (SOS_BLEND from columns N/P/R).")
-        # ------------------------------------------------------------
-        pass
+        st.caption(f"SoS loaded for {sos_ok} teams (SOS_BLEND from columns N/P/R).")
 
     mode = st.radio("Select evaluation mode:", ["Single matchup", "Run full daily schedule"], horizontal=True)
 
@@ -1216,14 +1193,17 @@ def main():
         m3.metric("Total Points", f"{result['Total']:.1f}")
         m4.metric("Home Margin (Home - Away)", f"{result['Home_Margin']:.1f}")
 
-        with st.expander("SoS modifier (debug)"):
-            st.write({
-                "SoS_Away (blend)": result.get("SoS_Away", np.nan),
-                "SoS_Home (blend)": result.get("SoS_Home", np.nan),
-                "SoS_MarginAdj_Pts (home - away)": result.get("SoS_MarginAdj_Pts", np.nan),
-                "SoS_weight": sos_weight,
-                "Note": "Margin-only adjustment is split: +adj/2 to home and -adj/2 to away. Totals stay stable."
-            })
+        # ------------------------------------------------------------
+        # SoS DEBUG (COMMENTED OUT) — kept for reference, not shown
+        # ------------------------------------------------------------
+        # with st.expander("SoS modifier (debug)"):
+        #     st.write({
+        #         "SoS_Away (blend)": result.get("SoS_Away", np.nan),
+        #         "SoS_Home (blend)": result.get("SoS_Home", np.nan),
+        #         "SoS_MarginAdj_Pts (home - away)": result.get("SoS_MarginAdj_Pts", np.nan),
+        #         "SoS_weight": sos_weight,
+        #         "Note": "Margin-only adjustment is split: +adj/2 to home and -adj/2 to away. Totals stay stable."
+        #     })
 
         with st.expander("KenPom data preview"):
             st.dataframe(df_kp.head(25), use_container_width=True)
