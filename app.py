@@ -1008,7 +1008,23 @@ def run_schedule(
 # -----------------------------
 def main():
     st.set_page_config(page_title="SignalAI NCAA Predictor", layout="wide")
-    st.title("SignalAI NCAA Predictor")
+
+    # ============================================================
+    # STEP 3 HEADER: LOGO + TITLE ROW (repo root image)
+    # ============================================================
+    logo_path = REPO_ROOT / "SignalAI_Logo.png"
+
+    col1, col2 = st.columns([1, 6])
+    with col1:
+        if logo_path.exists():
+            st.image(str(logo_path), width=120)
+        else:
+            # Safe fallback (won't crash the app)
+            st.write("")
+
+    with col2:
+        st.markdown("## **SignalAI NCAA Predictor**")
+        st.caption("AI-powered NCAA model edges")
 
     st.sidebar.header("Data source (Repo Root)")
 
@@ -1108,7 +1124,10 @@ def main():
         )
         return
 
-    st.caption(f"KenPom source: **{kp_source}**")
+    # ------------------------------------------------------------
+    # COMMENTED OUT PER YOUR REQUEST (keep in code, don't show UI)
+    # st.caption(f"KenPom source: **{kp_source}**")
+    # ------------------------------------------------------------
 
     # Sidebar controls
     st.sidebar.markdown("---")
@@ -1159,7 +1178,11 @@ def main():
             "SoS weight will have no effect."
         )
     else:
-        st.caption(f"SoS loaded for {sos_ok} teams (SOS_BLEND from columns N/P/R).")
+        # ------------------------------------------------------------
+        # COMMENTED OUT PER YOUR REQUEST (keep in code, don't show UI)
+        # st.caption(f"SoS loaded for {sos_ok} teams (SOS_BLEND from columns N/P/R).")
+        # ------------------------------------------------------------
+        pass
 
     mode = st.radio("Select evaluation mode:", ["Single matchup", "Run full daily schedule"], horizontal=True)
 
@@ -1264,6 +1287,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
