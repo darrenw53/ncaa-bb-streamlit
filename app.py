@@ -73,7 +73,7 @@ def tag_team_style(adjT: float, net: float) -> tuple[bool, bool, str]:
 
 
 # =============================
-# Share-card helpers (HTML)
+# Helpers
 # =============================
 def fmt_num(x, nd=1):
     if x is None or (isinstance(x, float) and np.isnan(x)):
@@ -108,6 +108,9 @@ def confidence_label(edge_abs):
     return "—"
 
 
+# =============================
+# Share-card helpers (HTML)
+# =============================
 def build_share_card_html(spread_df, total_df, title, subtitle):
     """
     Renders a branded, shareable HTML card.
@@ -1004,6 +1007,256 @@ def run_schedule(
     return results_df[cols]
 
 
+# =============================
+# Schedule Cards (Option 1)
+# =============================
+def inject_cards_css():
+    st.markdown(
+        """
+        <style>
+          .sig-cards-wrap { margin-top: 6px; }
+          .sig-card {
+            border: 1px solid rgba(0,0,0,0.08);
+            border-radius: 16px;
+            padding: 14px 14px 12px 14px;
+            background: #ffffff;
+            box-shadow: 0 10px 26px rgba(0,0,0,0.05);
+          }
+          .sig-card-top {
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:10px;
+            margin-bottom: 8px;
+          }
+          .sig-matchup {
+            font-weight: 900;
+            letter-spacing: -0.2px;
+            font-size: 15px;
+            line-height: 1.2;
+          }
+          .sig-tags {
+            margin-top: 4px;
+            font-size: 12px;
+            opacity: 0.85;
+            font-weight: 800;
+          }
+          .sig-pill {
+            display:inline-block;
+            padding: 5px 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(0,0,0,0.10);
+            background: rgba(0,0,0,0.03);
+            font-weight: 900;
+            font-size: 12px;
+            margin-left: 6px;
+            white-space: nowrap;
+          }
+          .sig-row {
+            display:flex;
+            gap:10px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+          }
+          .sig-kv {
+            flex: 1 1 160px;
+            border-radius: 12px;
+            padding: 10px 10px;
+            border: 1px solid rgba(0,0,0,0.06);
+            background: rgba(0,0,0,0.02);
+          }
+          .sig-k {
+            font-size: 11px;
+            font-weight: 900;
+            opacity: 0.70;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+          }
+          .sig-v {
+            font-size: 14px;
+            font-weight: 900;
+            letter-spacing: -0.2px;
+          }
+          .sig-subv {
+            margin-top: 3px;
+            font-size: 12px;
+            font-weight: 800;
+            opacity: 0.85;
+          }
+          .sig-badge {
+            display:inline-block;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 900;
+            border: 1px solid rgba(0,0,0,0.10);
+            background: rgba(0,0,0,0.03);
+            margin-right: 6px;
+            margin-top: 6px;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _safe_str(x) -> str:
+    if x is None:
+        return ""
+    if isinstance(x, float) and np.isnan(x):
+        return ""
+    return str(x)
+
+
+def render_schedule_cards(
+    df: pd.DataFrame,
+    spread_edge_threshold: float,
+    total_edge_threshold: float,
+    show_only_flagged: bool,
+    require_full_data: bool,
+    max_cards: int,
+):
+    """
+    Card view for schedule results.
+    - show_only_flagged: only show Spread_Play or Total_Play
+    - require_full_data: only show rows with Map_Status OK + Preds present + at least one vegas field present
+    """
+    if df is None or len(df) == 0:
+        st.info("No schedule results to display.")
+        return
+
+    df2 = df.copy()
+
+    # Only mapped
+    if "Map_Status" in df2.columns:
+        df2 = df2[df2["Map_Status"].astype(str).str.upper().eq("OK")]
+
+    # Require "full-ish" data
+    if require_full_data:
+        for col in ["Pred_Away", "Pred_Home"]:
+            if col in df2.columns:
+                df2 = df2[df2[col].notna()]
+        # Need at least one of spread/total to be present for a useful card
+        has_spread = ("Spread_Home" in df2.columns) and df2["Spread_Home"].notna()
+        has_total = ("DK_Total" in df2.columns) and df2["DK_Total"].notna()
+        df2 = df2[has_spread | has_total]
+
+    # Only flagged plays
+    if show_only_flagged:
+        sp_ok = ("Spread_Play" in df2.columns) and df2["Spread_Play"].fillna(False)
+        tot_ok = ("Total_Play" in df2.columns) and df2["Total_Play"].fillna(False)
+        df2 = df2[sp_ok | tot_ok]
+
+    if len(df2) == 0:
+        st.warning("No games match the current filters (mapped/full-data/flagged).")
+        return
+
+    # Sort by "best edge" (max of abs spread/total edges)
+    def _row_best_abs(r):
+        es = r.get("Edge_Spread", np.nan)
+        et = r.get("Edge_Total", np.nan)
+        a = abs(es) if pd.notna(es) else 0.0
+        b = abs(et) if pd.notna(et) else 0.0
+        return max(a, b)
+
+    df2["_best_abs"] = df2.apply(_row_best_abs, axis=1)
+    df2 = df2.sort_values("_best_abs", ascending=False).drop(columns=["_best_abs"])
+
+    df2 = df2.head(int(max_cards))
+
+    inject_cards_css()
+
+    # Render in 2 columns (nice on desktop; still stacks on mobile)
+    cols = st.columns(2)
+    col_idx = 0
+
+    for _, r in df2.iterrows():
+        visitor = _safe_str(r.get("Visitor", ""))
+        home = _safe_str(r.get("Home", ""))
+        matchup = f"{visitor} @ {home}".strip()
+
+        vtag = _safe_str(r.get("Visitor_Tag", "")).strip()
+        htag = _safe_str(r.get("Home_Tag", "")).strip()
+        tag_txt = ""
+        if vtag:
+            tag_txt += vtag
+        if htag:
+            tag_txt += (" / " if tag_txt else "") + htag
+
+        pred_away = r.get("Pred_Away", np.nan)
+        pred_home = r.get("Pred_Home", np.nan)
+        score_txt = f"{fmt_num(pred_away,1)} - {fmt_num(pred_home,1)}"
+
+        # Vegas
+        spread_home = r.get("Spread_Home", np.nan)
+        dk_total = r.get("DK_Total", np.nan)
+        vegas_spread_txt = fmt_num(spread_home, 1) if pd.notna(spread_home) else "—"
+        vegas_total_txt = fmt_num(dk_total, 1) if pd.notna(dk_total) else "—"
+
+        # Edges + picks
+        edge_spread = r.get("Edge_Spread", np.nan)
+        edge_total = r.get("Edge_Total", np.nan)
+
+        side_pick = pick_side_from_edge(edge_spread) if pd.notna(edge_spread) else ""
+        total_pick = pick_total_from_edge(edge_total) if pd.notna(edge_total) else ""
+
+        spread_conf = confidence_label(abs(edge_spread)) if pd.notna(edge_spread) else "—"
+        total_conf = confidence_label(abs(edge_total)) if pd.notna(edge_total) else "—"
+
+        # Badges
+        badges = []
+        if bool(r.get("Spread_Play", False)):
+            badges.append("✅ Spread Play")
+        if bool(r.get("Total_Play", False)):
+            badges.append("✅ Total Play")
+
+        # Build HTML
+        html = f"""
+        <div class="sig-card">
+          <div class="sig-card-top">
+            <div>
+              <div class="sig-matchup">{matchup}</div>
+              {"<div class='sig-tags'>" + tag_txt + "</div>" if tag_txt else ""}
+            </div>
+            <div>
+              <span class="sig-pill">{spread_conf if bool(r.get("Spread_Play", False)) else "Subscriber Card"}</span>
+            </div>
+          </div>
+
+          <div class="sig-row">
+            <div class="sig-kv">
+              <div class="sig-k">Model Score</div>
+              <div class="sig-v">{score_txt}</div>
+              <div class="sig-subv">Home Margin: {fmt_num(r.get("Home_Margin", np.nan),1)} • Total: {fmt_num(r.get("Total", np.nan),1)}</div>
+            </div>
+
+            <div class="sig-kv">
+              <div class="sig-k">Spread</div>
+              <div class="sig-v">Vegas: {vegas_spread_txt}</div>
+              <div class="sig-subv">Edge: {fmt_num(edge_spread,2) if pd.notna(edge_spread) else "—"} • Pick: {side_pick or "—"}</div>
+            </div>
+
+            <div class="sig-kv">
+              <div class="sig-k">Total</div>
+              <div class="sig-v">Vegas: {vegas_total_txt}</div>
+              <div class="sig-subv">Edge: {fmt_num(edge_total,2) if pd.notna(edge_total) else "—"} • Pick: {total_pick or "—"}</div>
+            </div>
+          </div>
+
+          <div style="margin-top:8px;">
+            {"".join([f"<span class='sig-badge'>{b}</span>" for b in badges]) if badges else "<span class='sig-badge'>Mapped • Full data</span>"}
+            <span class="sig-badge">Thresholds: Spread ≥ {fmt_num(spread_edge_threshold,1)} • Total ≥ {fmt_num(total_edge_threshold,1)}</span>
+          </div>
+        </div>
+        """
+
+        with cols[col_idx]:
+            st.markdown(html, unsafe_allow_html=True)
+
+        col_idx = 1 - col_idx
+
+
 # -----------------------------
 # Streamlit App (repo root auto-load)
 # -----------------------------
@@ -1260,6 +1513,16 @@ def main():
         with st.expander("Schedule preview"):
             st.dataframe(schedule_df.head(50), use_container_width=True)
 
+        # Schedule display options
+        st.markdown("### Display Options")
+        o1, o2, o3 = st.columns(3)
+        with o1:
+            show_only_flagged = st.toggle("Show only flagged plays", value=True, help="Shows only Spread_Play or Total_Play")
+        with o2:
+            require_full_data = st.toggle("Require full data", value=True, help="Only show mapped games with model preds and at least spread/total")
+        with o3:
+            max_cards = st.number_input("Max cards", min_value=4, max_value=200, value=40, step=4)
+
         if st.button("Run all games", type="primary"):
             results_df = run_schedule(
                 schedule_df=schedule_df,
@@ -1274,6 +1537,18 @@ def main():
                 sos_weight=sos_weight,
             )
 
+            # ----- NEW: Card view -----
+            st.markdown("### Today’s Board (Cards)")
+            render_schedule_cards(
+                df=results_df,
+                spread_edge_threshold=spread_edge_threshold,
+                total_edge_threshold=total_edge_threshold,
+                show_only_flagged=show_only_flagged,
+                require_full_data=require_full_data,
+                max_cards=max_cards,
+            )
+
+            # Keep everything you already had
             st.markdown("### Full Results (mapping + edges + flags)")
             st.dataframe(results_df, use_container_width=True)
 
