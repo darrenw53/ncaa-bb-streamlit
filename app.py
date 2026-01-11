@@ -31,6 +31,42 @@ GITHUB_BRANCH = "main"
 GITHUB_DATA_DIR = ""  # repo root
 
 
+# ============================================================
+# LOGO (Option B): relative path first, then bytes fallback
+# ============================================================
+def show_logo(width: int = 110) -> bool:
+    """
+    Robust logo loader for Streamlit Community Cloud + local.
+    - First tries relative path string (best for Streamlit Cloud)
+    - Then falls back to reading bytes from app.py folder
+    """
+    # 1) Try direct relative path (repo root)
+    try:
+        st.image(LOGO_FILENAME, width=width)
+        return True
+    except Exception:
+        pass
+
+    # 2) Fallback: read bytes from this file's directory
+    try:
+        p = Path(__file__).resolve().parent / LOGO_FILENAME
+        if p.exists():
+            st.image(p.read_bytes(), width=width)
+            return True
+    except Exception:
+        pass
+
+    # 3) Last resort: your existing LOGO_PATH
+    try:
+        if LOGO_PATH.exists():
+            st.image(LOGO_PATH.read_bytes(), width=width)
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
 # -----------------------------
 # Constants (match your sheet)
 # -----------------------------
@@ -1195,7 +1231,6 @@ def render_schedule_cards(
         html = textwrap.dedent(html).strip()
 
         with cols[col_idx]:
-            # Height can be tuned; this works well on iPad
             _render_html_component(html, height=270)
 
         col_idx = 1 - col_idx
@@ -1209,8 +1244,8 @@ def main():
 
     h1, h2 = st.columns([1, 5], vertical_alignment="center")
     with h1:
-        if LOGO_PATH.exists():
-            st.image(str(LOGO_PATH), width=110)
+        # Option B logo: relative path first, bytes fallback
+        show_logo(width=110)
     with h2:
         st.title("SignalAI NCAA Predictor")
 
