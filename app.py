@@ -31,42 +31,6 @@ GITHUB_BRANCH = "main"
 GITHUB_DATA_DIR = ""  # repo root
 
 
-# ============================================================
-# LOGO (Option B): relative path first, then bytes fallback
-# ============================================================
-def show_logo(width: int = 110) -> bool:
-    """
-    Robust logo loader for Streamlit Community Cloud + local.
-    - First tries relative path string (best for Streamlit Cloud)
-    - Then falls back to reading bytes from app.py folder
-    """
-    # 1) Try direct relative path (repo root)
-    try:
-        st.image(LOGO_FILENAME, width=width)
-        return True
-    except Exception:
-        pass
-
-    # 2) Fallback: read bytes from this file's directory
-    try:
-        p = Path(__file__).resolve().parent / LOGO_FILENAME
-        if p.exists():
-            st.image(p.read_bytes(), width=width)
-            return True
-    except Exception:
-        pass
-
-    # 3) Last resort: your existing LOGO_PATH
-    try:
-        if LOGO_PATH.exists():
-            st.image(LOGO_PATH.read_bytes(), width=width)
-            return True
-    except Exception:
-        pass
-
-    return False
-
-
 # -----------------------------
 # Constants (match your sheet)
 # -----------------------------
@@ -140,6 +104,31 @@ def confidence_label(edge_abs):
     if edge_abs >= 2:
         return "👍 Lean"
     return "—"
+
+
+def tier_from_edge_abs(edge_abs: float) -> str:
+    """Tier string based on your confidence thresholds."""
+    if edge_abs is None or (isinstance(edge_abs, float) and np.isnan(edge_abs)):
+        return ""
+    if edge_abs >= 6:
+        return "Strong"
+    if edge_abs >= 4:
+        return "Solid"
+    if edge_abs >= 2:
+        return "Lean"
+    return ""
+
+
+def units_from_tier(tier: str) -> float:
+    """Recommended units per tier (simple v1)."""
+    t = (tier or "").lower().strip()
+    if t == "strong":
+        return 1.5
+    if t == "solid":
+        return 1.0
+    if t == "lean":
+        return 0.5
+    return 0.0
 
 
 # =============================
@@ -993,7 +982,7 @@ def run_schedule(
 
 
 # =============================
-# Schedule Cards (Option 1) — RENDER VIA components.html (fixes iPad/Cloud)
+# Schedule Cards (Option B) — RENDER VIA components.html
 # =============================
 SIG_CARDS_CSS = """
 <style>
@@ -1113,6 +1102,7 @@ def render_schedule_cards(
     show_only_flagged: bool,
     require_full_data: bool,
     max_cards: int,
+    unit_size_dollars: int,
 ):
     if df is None or len(df) == 0:
         st.info("No schedule results to display.")
@@ -1182,13 +1172,28 @@ def render_schedule_cards(
         side_pick = pick_side_from_edge(edge_spread) if pd.notna(edge_spread) else ""
         total_pick = pick_total_from_edge(edge_total) if pd.notna(edge_total) else ""
 
-        spread_conf = confidence_label(abs(edge_spread)) if pd.notna(edge_spread) else "—"
+        # Pick the "primary" edge for tier/stake (bigger abs of spread vs total)
+        abs_sp = abs(edge_spread) if pd.notna(edge_spread) else 0.0
+        abs_to = abs(edge_total) if pd.notna(edge_total) else 0.0
+        primary_abs = max(abs_sp, abs_to)
+
+        tier = tier_from_edge_abs(primary_abs)
+        rec_units = units_from_tier(tier)
+        stake_dollars = rec_units * float(unit_size_dollars)
+
+        spread_conf = confidence_label(primary_abs)
 
         badges = []
         if bool(r.get("Spread_Play", False)):
             badges.append("✅ Spread Play")
         if bool(r.get("Total_Play", False)):
             badges.append("✅ Total Play")
+
+        stake_line = ""
+        if (bool(r.get("Spread_Play", False)) or bool(r.get("Total_Play", False))) and rec_units > 0:
+            stake_line = f"Stake: {fmt_num(rec_units,1)}u (${int(round(stake_dollars))})"
+        else:
+            stake_line = "Stake: —"
 
         html = f"""
 <div class="sig-card">
@@ -1198,7 +1203,7 @@ def render_schedule_cards(
       {"<div class='sig-tags'>" + tag_txt + "</div>" if tag_txt else ""}
     </div>
     <div>
-      <span class="sig-pill">{spread_conf if bool(r.get("Spread_Play", False)) else "Subscriber Card"}</span>
+      <span class="sig-pill">{spread_conf if (bool(r.get("Spread_Play", False)) or bool(r.get("Total_Play", False))) else "Subscriber Card"}</span>
     </div>
   </div>
 
@@ -1224,16 +1229,57 @@ def render_schedule_cards(
 
   <div style="margin-top:8px;">
     {"".join([f"<span class='sig-badge'>{b}</span>" for b in badges]) if badges else "<span class='sig-badge'>Mapped • Full data</span>"}
-    <span class="sig-badge">Thresholds: Spread ≥ {fmt_num(spread_edge_threshold,1)} • Total ≥ {fmt_num(total_edge_threshold,1)}</span>
+    <span class="sig-badge">{stake_line}</span>
+    <span class="sig-badge">Unit: ${int(unit_size_dollars)} • Thresholds: Spread ≥ {fmt_num(spread_edge_threshold,1)} • Total ≥ {fmt_num(total_edge_threshold,1)}</span>
   </div>
 </div>
 """
         html = textwrap.dedent(html).strip()
 
         with cols[col_idx]:
-            _render_html_component(html, height=270)
+            _render_html_component(html, height=285)
 
         col_idx = 1 - col_idx
+
+
+def add_staking_columns(results_df: pd.DataFrame, unit_size_dollars: int) -> pd.DataFrame:
+    """
+    Adds:
+      - Primary_Edge_Abs
+      - Tier
+      - Rec_Units
+      - Stake_$
+    Applies only to flagged plays (spread or total). Otherwise 0.
+    """
+    if results_df is None or len(results_df) == 0:
+        return results_df
+
+    df = results_df.copy()
+
+    def _primary_abs(r):
+        es = r.get("Edge_Spread", np.nan)
+        et = r.get("Edge_Total", np.nan)
+        a = abs(es) if pd.notna(es) else 0.0
+        b = abs(et) if pd.notna(et) else 0.0
+        return max(a, b)
+
+    df["Primary_Edge_Abs"] = df.apply(_primary_abs, axis=1)
+
+    def _is_flagged(r):
+        return bool(r.get("Spread_Play", False)) or bool(r.get("Total_Play", False))
+
+    df["_Flagged"] = df.apply(_is_flagged, axis=1)
+
+    df["Tier"] = df["Primary_Edge_Abs"].apply(lambda x: tier_from_edge_abs(x))
+    df["Rec_Units"] = df["Tier"].apply(units_from_tier)
+
+    # Flagged-only: else 0
+    df.loc[~df["_Flagged"], "Rec_Units"] = 0.0
+
+    df["Stake_$"] = (df["Rec_Units"].astype(float) * float(unit_size_dollars)).round(2)
+
+    df = df.drop(columns=["_Flagged"])
+    return df
 
 
 # -----------------------------
@@ -1244,8 +1290,8 @@ def main():
 
     h1, h2 = st.columns([1, 5], vertical_alignment="center")
     with h1:
-        # Option B logo: relative path first, bytes fallback
-        show_logo(width=110)
+        if LOGO_PATH.exists():
+            st.image(str(LOGO_PATH), width=110)
     with h2:
         st.title("SignalAI NCAA Predictor")
 
@@ -1256,15 +1302,11 @@ def main():
 
     auto_kp_bytes = None
     auto_sched_bytes = None
-    auto_kp_label = None
-    auto_sched_label = None
 
     if kp_path and kp_path.exists():
         auto_kp_bytes = kp_path.read_bytes()
-        auto_kp_label = f"Local (repo root): {kp_path.name}"
     if sched_path and sched_path.exists():
         auto_sched_bytes = sched_path.read_bytes()
-        auto_sched_label = f"Local (repo root): {sched_path.name}"
 
     use_github_fallback = st.sidebar.toggle(
         "Enable GitHub fallback (if local files missing)",
@@ -1285,7 +1327,7 @@ def main():
             with st.sidebar.spinner("Checking GitHub for newest files..."):
                 try:
                     if auto_kp_bytes is None:
-                        name, b = find_latest_github_file(
+                        _, b = find_latest_github_file(
                             owner=GITHUB_OWNER,
                             repo=GITHUB_REPO,
                             folder=GITHUB_DATA_DIR,
@@ -1295,10 +1337,9 @@ def main():
                         )
                         if b:
                             auto_kp_bytes = b
-                            auto_kp_label = f"GitHub (root): {name}"
 
                     if auto_sched_bytes is None:
-                        name, b = find_latest_github_file(
+                        _, b = find_latest_github_file(
                             owner=GITHUB_OWNER,
                             repo=GITHUB_REPO,
                             folder=GITHUB_DATA_DIR,
@@ -1308,7 +1349,6 @@ def main():
                         )
                         if b:
                             auto_sched_bytes = b
-                            auto_sched_label = f"GitHub (root): {name}"
                 except Exception as e:
                     st.sidebar.error(f"GitHub fallback failed: {e}")
 
@@ -1363,6 +1403,18 @@ def main():
     st.sidebar.subheader("Bet Flag Thresholds")
     spread_edge_threshold = st.sidebar.slider("Spread play threshold X", 0.0, 20.0, 2.0, 0.5)
     total_edge_threshold = st.sidebar.slider("Total play threshold Y", 0.0, 30.0, 3.0, 0.5)
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Unit Size (Flagged Plays Only)")
+    unit_size_dollars = st.sidebar.slider(
+        "Unit size ($)",
+        min_value=1,
+        max_value=20,
+        value=5,
+        step=1,
+        help="Stake amounts apply only to flagged plays (Spread_Play or Total_Play). "
+             "Tiers: Lean=0.5u, Solid=1.0u, Strong=1.5u."
+    )
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Team Mapping")
@@ -1462,6 +1514,26 @@ def main():
                 sos_weight=sos_weight,
             )
 
+            # Add staking columns (flagged-only)
+            results_df = add_staking_columns(results_df, unit_size_dollars=unit_size_dollars)
+
+            # Daily exposure summary (flagged-only)
+            flagged = results_df[(results_df.get("Spread_Play", False) == True) | (results_df.get("Total_Play", False) == True)].copy()
+            if len(flagged) > 0 and "Rec_Units" in flagged.columns:
+                total_units = float(flagged["Rec_Units"].fillna(0).sum())
+                total_stake = float(flagged["Stake_$"].fillna(0).sum())
+                strong_ct = int((flagged["Tier"].astype(str).str.lower() == "strong").sum())
+                solid_ct = int((flagged["Tier"].astype(str).str.lower() == "solid").sum())
+                lean_ct = int((flagged["Tier"].astype(str).str.lower() == "lean").sum())
+
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("Flagged plays", f"{len(flagged)}")
+                s2.metric("Total units", f"{total_units:.1f}u")
+                s3.metric("Total $ at risk", f"${total_stake:,.0f}")
+                s4.metric("Tier mix", f"S:{strong_ct}  So:{solid_ct}  L:{lean_ct}")
+            else:
+                st.info("No flagged plays found with the current thresholds (or lines missing).")
+
             st.markdown("### Today’s Board (Cards)")
             render_schedule_cards(
                 df=results_df,
@@ -1470,9 +1542,10 @@ def main():
                 show_only_flagged=show_only_flagged,
                 require_full_data=require_full_data,
                 max_cards=max_cards,
+                unit_size_dollars=unit_size_dollars,
             )
 
-            st.markdown("### Full Results (mapping + edges + flags)")
+            st.markdown("### Full Results (mapping + edges + flags + staking)")
             st.dataframe(results_df, use_container_width=True)
 
             csv_bytes = results_df.to_csv(index=False).encode("utf-8")
