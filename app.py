@@ -154,6 +154,99 @@ def pct_str(p: float, nd: int = 1) -> str:
 
 
 # =============================
+# Login gate (Option 1) — logo + password page
+# =============================
+def require_login(
+    logo_path: Path,
+    app_name: str = "SignalAI NCAA Predictor",
+    subscribe_url: str = "",
+) -> bool:
+    """
+    Simple password gate for Streamlit.
+    Uses st.secrets["APP_PASSWORD"].
+
+    Returns True if user is authenticated for this session.
+    """
+    if st.session_state.get("is_authed", False):
+        return True
+
+    # Read password from Streamlit secrets (recommended)
+    app_password = None
+    try:
+        app_password = st.secrets.get("APP_PASSWORD", None)
+    except Exception:
+        app_password = None
+
+    if not app_password:
+        st.set_page_config(page_title=app_name, layout="wide")
+        st.error("APP_PASSWORD is not set. Add it to Streamlit secrets to enable login.")
+        st.stop()
+
+    # Login screen
+    st.set_page_config(page_title=app_name, layout="wide")
+
+    left, mid, right = st.columns([1, 1.2, 1])
+    with mid:
+        st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+
+        if logo_path and logo_path.exists():
+            st.image(str(logo_path), use_container_width=True)
+
+        st.markdown(
+            f"""
+            <div style="
+                padding: 18px 18px 8px 18px;
+                border: 1px solid rgba(0,0,0,0.08);
+                border-radius: 16px;
+                box-shadow: 0 10px 26px rgba(0,0,0,0.05);
+                background: white;
+                ">
+              <div style="font-size:22px;font-weight:900;letter-spacing:-0.2px;margin-bottom:6px;">
+                {app_name}
+              </div>
+              <div style="opacity:0.75;font-weight:700;margin-bottom:14px;">
+                Subscriber Login
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        with st.form("login_form", clear_on_submit=False):
+            pw = st.text_input("Password", type="password", placeholder="Enter subscriber password")
+            submitted = st.form_submit_button("Log in")
+
+        if submitted:
+            if str(pw).strip() == str(app_password).strip():
+                st.session_state["is_authed"] = True
+                st.session_state["auth_error"] = ""
+                st.rerun()
+            else:
+                st.session_state["auth_error"] = "Invalid password. Please try again."
+
+        err = st.session_state.get("auth_error", "")
+        if err:
+            st.error(err)
+
+        if subscribe_url:
+            st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+            st.markdown(
+                """
+                <div style="opacity:0.75;font-weight:700;">
+                  Need access? Subscribe here:
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            st.link_button("Subscribe", subscribe_url)
+
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        st.caption("Entertainment only. Not financial advice.")
+
+    return False
+
+
+# =============================
 # Share-card helpers (HTML) — kept as-is
 # =============================
 def build_share_card_html(spread_df, total_df, title, subtitle):
@@ -1363,6 +1456,7 @@ def build_team_dashboard_table(results_df: pd.DataFrame, team: str) -> pd.DataFr
     show_cols = [
         "Matchup", "Team_Side",
         "Pred_Away", "Pred_Home", "Home_Margin", "Total",
+        "Home_WinProb", "Away_WinProb",
         "Spread_Home", "Edge_Spread", "Spread_Pick", "Spread_Play",
         "DK_Total", "Edge_Total", "Total_Pick", "Total_Play",
         "Tier", "Rec_Units", "Stake_$",
@@ -1438,6 +1532,11 @@ def render_team_dashboard(team: str, df_kp: pd.DataFrame, results_df: pd.DataFra
 # Streamlit App
 # -----------------------------
 def main():
+    # ✅ Password gate + logo login page (Option 1)
+    subscribe_url = ""  # Optional: paste your Squarespace checkout link here
+    if not require_login(logo_path=LOGO_PATH, app_name="SignalAI NCAA Predictor", subscribe_url=subscribe_url):
+        return
+
     st.set_page_config(page_title="SignalAI NCAA Predictor", layout="wide")
 
     h1, h2 = st.columns([1, 5], vertical_alignment="center")
@@ -1446,6 +1545,12 @@ def main():
             st.image(str(LOGO_PATH), width=110)
     with h2:
         st.title("SignalAI NCAA Predictor")
+
+    # Optional logout
+    if st.sidebar.button("Log out"):
+        st.session_state["is_authed"] = False
+        st.session_state["auth_error"] = ""
+        st.rerun()
 
     # session cache for schedule results (so Team Dashboard can use it)
     if "schedule_results_df" not in st.session_state:
