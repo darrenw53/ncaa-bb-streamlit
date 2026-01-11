@@ -132,6 +132,28 @@ def units_from_tier(tier: str) -> float:
 
 
 # =============================
+# Win probability helpers
+# =============================
+def win_prob_from_margin(margin_pts: float, scale: float = 7.5) -> float:
+    """
+    Converts a predicted margin (Home - Away) into a win probability for HOME.
+    """
+    if margin_pts is None or (isinstance(margin_pts, float) and np.isnan(margin_pts)):
+        return np.nan
+    try:
+        x = float(margin_pts) / float(scale)
+        return float(1.0 / (1.0 + np.exp(-x)))
+    except Exception:
+        return np.nan
+
+
+def pct_str(p: float, nd: int = 1) -> str:
+    if p is None or (isinstance(p, float) and np.isnan(p)):
+        return "—"
+    return f"{100.0 * float(p):.{nd}f}%"
+
+
+# =============================
 # Share-card helpers (HTML) — kept as-is
 # =============================
 def build_share_card_html(spread_df, total_df, title, subtitle):
@@ -831,6 +853,9 @@ def predict_matchup(
     margin_home = home_pts - away_pts
     total_pts = home_pts + away_pts
 
+    home_win_prob = win_prob_from_margin(margin_home, scale=7.5)
+    away_win_prob = (1.0 - home_win_prob) if pd.notna(home_win_prob) else np.nan
+
     return {
         "Away": team_away,
         "Home": team_home,
@@ -839,6 +864,8 @@ def predict_matchup(
         "Pred_Home": float(np.round(home_pts, 1)),
         "Home_Margin": float(np.round(margin_home, 1)),
         "Total": float(np.round(total_pts, 1)),
+        "Home_WinProb": float(np.round(home_win_prob, 6)) if pd.notna(home_win_prob) else np.nan,
+        "Away_WinProb": float(np.round(away_win_prob, 6)) if pd.notna(away_win_prob) else np.nan,
         "SoS_Away": float(sos_away) if pd.notna(sos_away) else np.nan,
         "SoS_Home": float(sos_home) if pd.notna(sos_home) else np.nan,
         "SoS_MarginAdj_Pts": float(np.round(margin_adj_pts, 2)),
@@ -887,6 +914,8 @@ def run_schedule(
                 "Pred_Home": np.nan,
                 "Home_Margin": np.nan,
                 "Total": np.nan,
+                "Home_WinProb": np.nan,
+                "Away_WinProb": np.nan,
                 "SoS_Away": np.nan,
                 "SoS_Home": np.nan,
                 "SoS_MarginAdj_Pts": np.nan,
@@ -972,7 +1001,7 @@ def run_schedule(
         "Visitor_MapMethod", "Home_MapMethod", "Map_Status",
         "TIME", "TV", "location",
         "DK_Fav", "DK_Line_Fav", "Spread_Home", "DK_Total",
-        "Pred_Away", "Pred_Home", "Home_Margin", "Total",
+        "Pred_Away", "Pred_Home", "Home_WinProb", "Away_WinProb", "Home_Margin", "Total",
         "SoS_Away", "SoS_Home", "SoS_MarginAdj_Pts",
         "Edge_Spread", "Edge_Total", "Spread_Play", "Total_Play",
         "Odds by draft kings",
@@ -1194,6 +1223,10 @@ def render_schedule_cards(
         else:
             stake_line = "Stake: —"
 
+        hwp = r.get("Home_WinProb", np.nan)
+        awp = r.get("Away_WinProb", np.nan)
+        winprob_txt = f"Win%: Away {pct_str(awp,1)} • Home {pct_str(hwp,1)}"
+
         html = f"""
 <div class="sig-card">
   <div class="sig-card-top">
@@ -1210,7 +1243,7 @@ def render_schedule_cards(
     <div class="sig-kv">
       <div class="sig-k">Model Score</div>
       <div class="sig-v">{score_txt}</div>
-      <div class="sig-subv">Home Margin: {fmt_num(r.get("Home_Margin", np.nan),1)} • Total: {fmt_num(r.get("Total", np.nan),1)}</div>
+      <div class="sig-subv">Home Margin: {fmt_num(r.get("Home_Margin", np.nan),1)} • Total: {fmt_num(r.get("Total", np.nan),1)} • {winprob_txt}</div>
     </div>
 
     <div class="sig-kv">
@@ -1585,11 +1618,13 @@ def main():
         )
 
         st.markdown("## Predicted Score")
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
         m1.metric(f"{result['Away']} (Away)", f"{result['Pred_Away']:.1f}")
         m2.metric(f"{result['Home']} (Home)", f"{result['Pred_Home']:.1f}")
         m3.metric("Total Points", f"{result['Total']:.1f}")
         m4.metric("Home Margin (Home - Away)", f"{result['Home_Margin']:.1f}")
+        m5.metric("Home Win %", pct_str(result.get("Home_WinProb", np.nan), 1))
+        m6.metric("Away Win %", pct_str(result.get("Away_WinProb", np.nan), 1))
 
         with st.expander("KenPom data preview"):
             st.dataframe(df_kp.head(25), use_container_width=True)
