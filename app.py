@@ -193,25 +193,24 @@ def require_login(
             st.image(str(logo_path), use_container_width=True)
 
         st.markdown(
-    """
-    <div style="
-        background: #ffffff;
-        border-radius: 16px;
-        padding: 16px 18px;
-        border: 1px solid rgba(0,0,0,0.10);
-        margin-top: 10px;
-        margin-bottom: 12px;
-    ">
-      <div style="font-size: 22px; font-weight: 900; color: #0f172a; line-height: 1.1;">
-        SignalAI NCAA Predictor
-      </div>
-      <div style="font-size: 13px; font-weight: 700; color: #334155; margin-top: 6px;">
-        Subscriber Login
-      </div>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+            f"""
+            <div style="
+                padding: 18px 18px 8px 18px;
+                border: 1px solid rgba(0,0,0,0.08);
+                border-radius: 16px;
+                box-shadow: 0 10px 26px rgba(0,0,0,0.05);
+                background: white;
+                ">
+              <div style="font-size:22px;font-weight:900;letter-spacing:-0.2px;margin-bottom:6px;">
+                {app_name}
+              </div>
+              <div style="opacity:0.75;font-weight:700;margin-bottom:14px;">
+                Subscriber Login
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
         with st.form("login_form", clear_on_submit=False):
             pw = st.text_input("Password", type="password", placeholder="Enter subscriber password")
@@ -245,6 +244,179 @@ def require_login(
         st.caption("Entertainment only. Not financial advice.")
 
     return False
+
+
+# =============================
+# Subscriber Guide (in-app help page)
+# =============================
+def _get_query_param(name: str, default: str = "") -> str:
+    """Compatibility wrapper for Streamlit query params."""
+    try:
+        # Newer Streamlit
+        v = st.query_params.get(name, default)
+        if isinstance(v, list):
+            return v[0] if v else default
+        return str(v) if v is not None else default
+    except Exception:
+        try:
+            # Older Streamlit
+            v = st.experimental_get_query_params().get(name, [default])
+            return v[0] if v else default
+        except Exception:
+            return default
+
+
+def render_subscriber_guide(app_name: str = "SignalAI NCAA Predictor"):
+    st.markdown(f"# {app_name} — Subscriber Guide")
+    st.caption("Quick, practical instructions for subscribers. For entertainment purposes only.")
+
+    st.markdown("---")
+    st.markdown("## Getting started")
+    st.markdown(
+        """
+
+- **Log in** with the subscriber password.
+
+- Use the left sidebar to adjust sliders (home edge, offense/defense/tempo, SoS, thresholds, unit size).
+
+- Choose a mode at the top: **Single matchup**, **Run full daily schedule**, or **Team dashboard**.
+""")
+
+    st.markdown("## What the main numbers mean")
+    st.markdown(
+        """
+
+- **Pred_Away / Pred_Home**: the model’s predicted score.
+
+- **Home_Margin**: predicted (Home − Away).
+
+- **Total**: predicted combined points.
+
+- **Win%**: model win probability for each team (based on predicted margin).
+""")
+
+    st.markdown("## Understanding edges and picks")
+    st.markdown(
+        """
+
+- **Spread_Home**: the posted spread expressed as *home team spread* (negative = home favored).
+
+- **Edge_Spread**: how far the model is from the spread.
+
+  - Positive → model likes **HOME** against the spread.
+
+  - Negative → model likes **VISITOR** against the spread.
+
+- **DK_Total**: posted total points.
+
+- **Edge_Total**: model total − posted total.
+
+  - Positive → lean **OVER**.
+
+  - Negative → lean **UNDER**.
+""")
+
+    st.markdown("## Confidence tiers and staking")
+    st.markdown(
+        """
+
+- A play becomes **flagged** when its absolute edge clears your thresholds:
+
+  - **Spread_Play** if |Edge_Spread| ≥ your spread threshold.
+
+  - **Total_Play** if |Edge_Total| ≥ your total threshold.
+
+- **Confidence label** is based on the *largest* edge (spread or total):
+
+  - 👍 **Lean** (≥ 2)
+
+  - ✅ **Solid** (≥ 4)
+
+  - 🔥 **Strong** (≥ 6)
+
+- **Recommended Units** (flagged plays only):
+
+  - Lean = 0.5u, Solid = 1.0u, Strong = 1.5u
+
+- **Stake_$** = Rec_Units × your selected **Unit size ($)**.
+""")
+
+    st.markdown("## Strength of Schedule (SoS) slider")
+    st.markdown(
+        """
+
+- **SoS weight** adds a *margin-only* adjustment based on SoS differential.
+
+- It nudges the predicted margin (and therefore win%) without changing your inputs.
+
+- If you want SoS to have **no influence**, set **SoS weight = 0**.
+""")
+
+    st.markdown("## Mode walkthroughs")
+    with st.expander("Single matchup", expanded=True):
+        st.markdown(
+            """
+
+1) Pick the **Away** and **Home** team.
+
+2) Read the predicted score, total, margin, and win%.
+
+3) Adjust sliders to see how predictions move.
+""")
+
+    with st.expander("Run full daily schedule", expanded=True):
+        st.markdown(
+            """
+
+1) Choose display options:
+
+   - **Show only flagged plays**: shows only plays that clear your thresholds.
+
+   - **Require full data**: filters out games missing lines/totals.
+
+   - **Max cards**: how many matchup cards to display.
+
+2) Click **Run all games**.
+
+3) Review:
+
+   - **Exposure summary** (flagged plays only)
+
+   - **Cards view** (quick read)
+
+   - **Full Results table** (everything)
+
+4) Download the results CSV if you want to archive or share.
+""")
+
+    with st.expander("Team dashboard", expanded=True):
+        st.markdown(
+            """
+
+1) Select a team.
+
+2) Review the team profile (ORtg/DRtg/Net/Tempo/SoS).
+
+3) See that team’s games from the most recent schedule run.
+
+   - If it says no schedule results are loaded, go run **Run full daily schedule** first.
+""")
+
+    st.markdown("## Tags: TRAP and FRAUD")
+    st.markdown(
+        """
+
+- Some teams may display style tags:
+
+  - **🏆 TRAP**: fits the trapezoid profile.
+
+  - **🚨 FRAUD**: flagged as fraud by the pace/net filters.
+
+These are informational — use them however you like in your process.
+""")
+
+    st.markdown("---")
+    st.caption("Entertainment only. Not financial advice.")
 
 
 # =============================
@@ -1540,6 +1712,17 @@ def main():
 
     st.set_page_config(page_title="SignalAI NCAA Predictor", layout="wide")
 
+    # -----------------------------
+    # In-app routing (subscriber guide)
+    # -----------------------------
+    page = _get_query_param("page", "app").lower().strip()
+    if page in {"help", "guide", "instructions"}:
+        st.sidebar.markdown("### Navigation")
+        st.sidebar.markdown("[← Back to app](?page=app)")
+        st.sidebar.markdown("---")
+        render_subscriber_guide(app_name="SignalAI NCAA Predictor")
+        return
+
     h1, h2 = st.columns([1, 5], vertical_alignment="center")
     with h1:
         if LOGO_PATH.exists():
@@ -1552,6 +1735,9 @@ def main():
         st.session_state["is_authed"] = False
         st.session_state["auth_error"] = ""
         st.rerun()
+
+    # Subscriber help link
+    st.sidebar.markdown("[📘 Subscriber Guide](?page=help)")
 
     # session cache for schedule results (so Team Dashboard can use it)
     if "schedule_results_df" not in st.session_state:
@@ -1851,4 +2037,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
