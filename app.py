@@ -1172,7 +1172,6 @@ def render_schedule_cards(
         side_pick = pick_side_from_edge(edge_spread) if pd.notna(edge_spread) else ""
         total_pick = pick_total_from_edge(edge_total) if pd.notna(edge_total) else ""
 
-        # Pick the "primary" edge for tier/stake (bigger abs of spread vs total)
         abs_sp = abs(edge_spread) if pd.notna(edge_spread) else 0.0
         abs_to = abs(edge_total) if pd.notna(edge_total) else 0.0
         primary_abs = max(abs_sp, abs_to)
@@ -1275,11 +1274,131 @@ def add_staking_columns(results_df: pd.DataFrame, unit_size_dollars: int) -> pd.
 
     # Flagged-only: else 0
     df.loc[~df["_Flagged"], "Rec_Units"] = 0.0
-
     df["Stake_$"] = (df["Rec_Units"].astype(float) * float(unit_size_dollars)).round(2)
 
     df = df.drop(columns=["_Flagged"])
     return df
+
+
+# =============================
+# TEAM DASHBOARD (Option A)
+# =============================
+def build_team_dashboard_table(results_df: pd.DataFrame, team: str) -> pd.DataFrame:
+    """
+    Filters schedule results down to games involving `team`, and adds a few
+    convenience columns for the dashboard view.
+    """
+    if results_df is None or len(results_df) == 0:
+        return pd.DataFrame()
+
+    df = results_df.copy()
+    df["Visitor"] = df.get("Visitor", "").astype(str)
+    df["Home"] = df.get("Home", "").astype(str)
+
+    mask = (df["Visitor"] == team) | (df["Home"] == team) | (df.get("Visitor_Mapped", "") == team) | (df.get("Home_Mapped", "") == team)
+    df = df[mask].copy()
+
+    if len(df) == 0:
+        return df
+
+    # Identify which side the team is on (visitor/home)
+    df["Team_Side"] = np.where(df["Home"] == team, "HOME",
+                       np.where(df["Visitor"] == team, "VISITOR",
+                       np.where(df.get("Home_Mapped", "") == team, "HOME",
+                       np.where(df.get("Visitor_Mapped", "") == team, "VISITOR", ""))))
+
+    # Basic pick labels for convenience
+    df["Spread_Pick"] = df["Edge_Spread"].apply(lambda x: pick_side_from_edge(x) if pd.notna(x) else "")
+    df["Total_Pick"] = df["Edge_Total"].apply(lambda x: pick_total_from_edge(x) if pd.notna(x) else "")
+
+    # A clean matchup string
+    df["Matchup"] = df["Visitor"].astype(str) + " @ " + df["Home"].astype(str)
+
+    # Sort most relevant first: flagged, then biggest edge
+    def _best_abs(r):
+        es = r.get("Edge_Spread", np.nan)
+        et = r.get("Edge_Total", np.nan)
+        a = abs(es) if pd.notna(es) else 0.0
+        b = abs(et) if pd.notna(et) else 0.0
+        return max(a, b)
+
+    df["_best_abs"] = df.apply(_best_abs, axis=1)
+    df["_flag"] = (df.get("Spread_Play", False).fillna(False) | df.get("Total_Play", False).fillna(False)).astype(int)
+    df = df.sort_values(["_flag", "_best_abs"], ascending=[False, False]).drop(columns=["_best_abs", "_flag"])
+
+    # Columns to show
+    show_cols = [
+        "Matchup", "Team_Side",
+        "Pred_Away", "Pred_Home", "Home_Margin", "Total",
+        "Spread_Home", "Edge_Spread", "Spread_Pick", "Spread_Play",
+        "DK_Total", "Edge_Total", "Total_Pick", "Total_Play",
+        "Tier", "Rec_Units", "Stake_$",
+        "Visitor_Tag", "Home_Tag",
+        "TIME", "TV", "location",
+        "Map_Status",
+    ]
+    show_cols = [c for c in show_cols if c in df.columns]
+    return df[show_cols]
+
+
+def render_team_dashboard(team: str, df_kp: pd.DataFrame, results_df: pd.DataFrame | None):
+    st.markdown("## Team Dashboard")
+
+    # Team profile from KenPom
+    row = df_kp.loc[df_kp["Team"] == team]
+    if row.empty:
+        st.warning("Team not found in KenPom table.")
+        return
+    r = row.iloc[0]
+
+    # Header
+    tag = str(r.get("Style_Tag", "") or "")
+    sub = []
+    if tag:
+        sub.append(tag)
+    if bool(r.get("In_Trapezoid", False)):
+        sub.append("In Trapezoid")
+    if bool(r.get("Fraud", False)):
+        sub.append("Fraud Flag")
+    subtitle = " • ".join([s for s in sub if s])
+
+    st.markdown(f"### {team} {('— ' + subtitle) if subtitle else ''}")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("ORtg", fmt_num(r.get("ORtg", np.nan), 1))
+    c2.metric("DRtg", fmt_num(r.get("DRtg", np.nan), 1))
+    c3.metric("NetRtg", fmt_num(r.get("NetRtg", np.nan), 1))
+    c4.metric("AdjT", fmt_num(r.get("AdjT", np.nan), 1))
+    c5.metric("SOS Blend", fmt_num(r.get("SOS_BLEND", np.nan), 2))
+
+    with st.expander("SoS detail (from columns N/P/R)"):
+        d1, d2, d3 = st.columns(3)
+        d1.metric("SOS_NET", fmt_num(r.get("SOS_NET", np.nan), 2))
+        d2.metric("SOS_OFF", fmt_num(r.get("SOS_OFF", np.nan), 2))
+        d3.metric("SOS_DEF", fmt_num(r.get("SOS_DEF", np.nan), 2))
+
+    st.markdown("---")
+    st.markdown("### Today’s Games (if schedule was run)")
+
+    if results_df is None or len(results_df) == 0:
+        st.info("No schedule results loaded yet. Go to **Run full daily schedule** and click **Run all games** once. Then come back here.")
+        return
+
+    team_games = build_team_dashboard_table(results_df, team)
+    if team_games.empty:
+        st.warning("No games found for this team in the current schedule results.")
+        return
+
+    # Quick summary for this team
+    sp_ct = int(team_games.get("Spread_Play", pd.Series([False]*len(team_games))).fillna(False).sum()) if "Spread_Play" in team_games.columns else 0
+    tot_ct = int(team_games.get("Total_Play", pd.Series([False]*len(team_games))).fillna(False).sum()) if "Total_Play" in team_games.columns else 0
+
+    s1, s2, s3 = st.columns(3)
+    s1.metric("Games on board", str(len(team_games)))
+    s2.metric("Flagged spreads", str(sp_ct))
+    s3.metric("Flagged totals", str(tot_ct))
+
+    st.dataframe(team_games, use_container_width=True)
 
 
 # -----------------------------
@@ -1294,6 +1413,10 @@ def main():
             st.image(str(LOGO_PATH), width=110)
     with h2:
         st.title("SignalAI NCAA Predictor")
+
+    # session cache for schedule results (so Team Dashboard can use it)
+    if "schedule_results_df" not in st.session_state:
+        st.session_state["schedule_results_df"] = None
 
     st.sidebar.header("Data source (Repo Root)")
 
@@ -1431,7 +1554,12 @@ def main():
         st.error(f"Error loading KenPom file: {e}")
         st.stop()
 
-    mode = st.radio("Select evaluation mode:", ["Single matchup", "Run full daily schedule"], horizontal=True)
+    # ✅ Added Team Dashboard mode (Option A) without removing anything
+    mode = st.radio(
+        "Select evaluation mode:",
+        ["Single matchup", "Run full daily schedule", "Team dashboard"],
+        horizontal=True
+    )
 
     if mode == "Single matchup":
         teams = sorted(df_kp["Team"].unique().tolist())
@@ -1466,7 +1594,7 @@ def main():
         with st.expander("KenPom data preview"):
             st.dataframe(df_kp.head(25), use_container_width=True)
 
-    else:
+    elif mode == "Run full daily schedule":
         st.markdown("## Run Full Daily Schedule")
 
         if sched_uploaded is not None:
@@ -1517,14 +1645,20 @@ def main():
             # Add staking columns (flagged-only)
             results_df = add_staking_columns(results_df, unit_size_dollars=unit_size_dollars)
 
+            # cache so Team Dashboard can use it
+            st.session_state["schedule_results_df"] = results_df.copy()
+
             # Daily exposure summary (flagged-only)
-            flagged = results_df[(results_df.get("Spread_Play", False) == True) | (results_df.get("Total_Play", False) == True)].copy()
+            flagged = results_df[
+                (results_df.get("Spread_Play", False) == True) | (results_df.get("Total_Play", False) == True)
+            ].copy()
+
             if len(flagged) > 0 and "Rec_Units" in flagged.columns:
                 total_units = float(flagged["Rec_Units"].fillna(0).sum())
                 total_stake = float(flagged["Stake_$"].fillna(0).sum())
-                strong_ct = int((flagged["Tier"].astype(str).str.lower() == "strong").sum())
-                solid_ct = int((flagged["Tier"].astype(str).str.lower() == "solid").sum())
-                lean_ct = int((flagged["Tier"].astype(str).str.lower() == "lean").sum())
+                strong_ct = int((flagged["Tier"].astype(str).str.lower() == "strong").sum()) if "Tier" in flagged.columns else 0
+                solid_ct = int((flagged["Tier"].astype(str).str.lower() == "solid").sum()) if "Tier" in flagged.columns else 0
+                lean_ct = int((flagged["Tier"].astype(str).str.lower() == "lean").sum()) if "Tier" in flagged.columns else 0
 
                 s1, s2, s3, s4 = st.columns(4)
                 s1.metric("Flagged plays", f"{len(flagged)}")
@@ -1555,6 +1689,23 @@ def main():
                 file_name="schedule_predictions_full.csv",
                 mime="text/csv",
             )
+
+    else:
+        # ✅ TEAM DASHBOARD (Option A)
+        teams = sorted(df_kp["Team"].unique().tolist())
+        default_team = teams[0] if teams else ""
+
+        # If we already have cached schedule results, try to default to a team that appears in today's board
+        cached = st.session_state.get("schedule_results_df", None)
+        if isinstance(cached, pd.DataFrame) and len(cached) > 0:
+            # try to pick a team that is on the schedule if possible
+            todays = pd.unique(pd.concat([cached.get("Visitor", pd.Series(dtype=str)), cached.get("Home", pd.Series(dtype=str))], ignore_index=True))
+            todays = [t for t in todays if isinstance(t, str) and t.strip() in set(teams)]
+            if todays:
+                default_team = todays[0]
+
+        team = st.selectbox("Select a team", teams, index=(teams.index(default_team) if default_team in teams else 0))
+        render_team_dashboard(team=team, df_kp=df_kp, results_df=st.session_state.get("schedule_results_df", None))
 
 
 if __name__ == "__main__":
