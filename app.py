@@ -193,24 +193,25 @@ def require_login(
             st.image(str(logo_path), use_container_width=True)
 
         st.markdown(
-            f"""
-            <div style="
-                padding: 18px 18px 8px 18px;
-                border: 1px solid rgba(0,0,0,0.08);
-                border-radius: 16px;
-                box-shadow: 0 10px 26px rgba(0,0,0,0.05);
-                background: white;
-                ">
-              <div style="font-size:22px;font-weight:900;letter-spacing:-0.2px;margin-bottom:6px;">
-                {app_name}
-              </div>
-              <div style="opacity:0.75;font-weight:700;margin-bottom:14px;">
-                Subscriber Login
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+    """
+    <div style="
+        background: #ffffff;
+        border-radius: 16px;
+        padding: 16px 18px;
+        border: 1px solid rgba(0,0,0,0.10);
+        margin-top: 10px;
+        margin-bottom: 12px;
+    ">
+      <div style="font-size: 22px; font-weight: 900; color: #0f172a; line-height: 1.1;">
+        SignalAI NCAA Predictor
+      </div>
+      <div style="font-size: 13px; font-weight: 700; color: #334155; margin-top: 6px;">
+        Subscriber Login
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
         with st.form("login_form", clear_on_submit=False):
             pw = st.text_input("Password", type="password", placeholder="Enter subscriber password")
@@ -1850,3 +1851,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
