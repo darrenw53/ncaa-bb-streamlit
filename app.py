@@ -924,7 +924,7 @@ ALIAS_MAP = {
     "oklahoma state": "Oklahoma St.",
     "tennessee state": "Tennessee St.",
     "southeast missouri state": "Southeast Missouri",
-    "UConn": "Connecticut",
+    "Connecticut": "UConn",
     "cal state bakersfield": "Cal St. Bakersfield",
 }
 STOPWORDS = {"university", "college", "the", "at", "of"}
@@ -2038,4 +2038,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
