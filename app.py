@@ -40,8 +40,15 @@ AVG_TEMPO = 64.8
 # -----------------------------
 # Subscriber defaults / baselines
 # -----------------------------
-# You were previously running Tempo Scale at 0.93.
-# Re-center the slider so 1.00 becomes your old "0.93" behavior.
+# Re-centered sliders:
+#   - Offense scale:   slider 1.00 => effective 0.97
+#   - Defense scale:   slider 1.00 => effective 1.03
+#   - Tempo scale:     slider 1.00 => effective 0.98
+#
+# This lets subscribers think in "up/down from your tuned baseline" while
+# keeping the UI default at 1.00.
+OFF_BASELINE = 0.97
+DEF_BASELINE = 1.03
 TEMPO_BASELINE = 0.93
 
 # Subscriber launch default for Strength of Schedule weight
@@ -1100,19 +1107,22 @@ def predict_matchup(
     tempo_scale: float = 1.0,
     sos_weight: float = 0.0,
 ):
-    # Re-centered tempo: slider value is multiplied by TEMPO_BASELINE so that
-    # 1.00 represents your previous "0.93" baseline behavior.
+    # Re-centered sliders:
+    #   slider=1.00 means "use the tuned subscriber baseline".
+    #   effective multiplier = slider × BASELINE
+    effective_off_scale = float(off_scale) * float(OFF_BASELINE)
+    effective_def_scale = float(def_scale) * float(DEF_BASELINE)
     effective_tempo_scale = float(tempo_scale) * float(TEMPO_BASELINE)
 
     away_row = df_kp.loc[df_kp["Team"] == team_away].iloc[0]
     home_row = df_kp.loc[df_kp["Team"] == team_home].iloc[0]
 
-    OR_away = away_row["ORtg"] * off_scale
-    DR_away = away_row["DRtg"] * def_scale
+    OR_away = away_row["ORtg"] * effective_off_scale
+    DR_away = away_row["DRtg"] * effective_def_scale
     T_away = away_row["AdjT"] * effective_tempo_scale
 
-    OR_home = home_row["ORtg"] * off_scale
-    DR_home = home_row["DRtg"] * def_scale
+    OR_home = home_row["ORtg"] * effective_off_scale
+    DR_home = home_row["DRtg"] * effective_def_scale
     T_home = home_row["AdjT"] * effective_tempo_scale
 
     possessions = (T_away * T_home) / AVG_TEMPO
@@ -1784,16 +1794,21 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.header("Adjustments")
     home_edge_points = st.sidebar.slider("Home edge (pts added to HOME score)", -10.0, 10.0, 3.0, 0.5)
-    off_scale = st.sidebar.slider("Offense scale (ORtg multiplier)", 0.80, 1.20, 1.00, 0.01)
+    off_scale = st.sidebar.slider(
+        "Offense scale (ORtg multiplier)",
+        0.80, 1.20, 1.00, 0.01,
+        help=f"Re-centered so 1.00 matches your tuned baseline (effective = slider × {OFF_BASELINE})."
+    )
     def_scale = st.sidebar.slider(
         "Defense scale (DRtg multiplier)",
         0.80, 1.20, 1.00, 0.01,
-        help=">1.00 makes DRtg larger (worse defense) -> increases opponent points."
+        help=f">1.00 makes DRtg larger (worse defense) -> increases opponent points. "
+             f"Re-centered so 1.00 matches your tuned baseline (effective = slider × {DEF_BASELINE})."
     )
     tempo_scale = st.sidebar.slider(
         "Tempo scale (re-centered)",
         0.80, 1.20, 1.00, 0.01,
-        help=f"Re-centered so 1.00 matches your previous baseline (old 0.93). Effective = slider × {TEMPO_BASELINE}."
+        help=f"Re-centered so 1.00 matches your tuned baseline. Effective = slider × {TEMPO_BASELINE}."
     )
 
     st.sidebar.markdown("---")
