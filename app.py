@@ -1147,9 +1147,6 @@ def predict_matchup(
     away_pts -= (margin_adj_pts / 2.0)
 
     margin_home = home_pts - away_pts
-    # Margin compression for realism / accuracy
-    margin_home *= 0.90
-
     total_pts = home_pts + away_pts
 
     home_win_prob = win_prob_from_margin(margin_home, scale=7.5)
@@ -2008,6 +2005,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
