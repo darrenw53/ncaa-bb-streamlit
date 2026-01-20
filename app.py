@@ -37,16 +37,6 @@ GITHUB_DATA_DIR = ""  # repo root
 AVG_EFF = 102.0
 AVG_TEMPO = 64.8
 
-# -----------------------------
-# Subscriber defaults / baselines
-# -----------------------------
-# You were previously running Tempo Scale at 0.93.
-# Re-center the slider so 1.00 becomes your old "0.93" behavior.
-TEMPO_BASELINE = 0.93
-
-# Subscriber launch default for Strength of Schedule weight
-DEFAULT_SOS_WEIGHT = 0.85
-
 
 # -----------------------------
 # Trapezoid / Fraud tagging
@@ -918,29 +908,23 @@ def load_schedule_excel(uploaded_file: io.BytesIO) -> pd.DataFrame:
 # Team mapping (Schedule -> KenPom)
 # -----------------------------
 ALIAS_MAP = {
-    'american university': 'American',
-    'app state': 'Appalachian St.',
-    'cal state bakersfield': 'Cal St. Bakersfield',
-    'delaware state': 'Delaware St.',
-    'georgia state': 'Georgia St.',
-    'idaho state': 'Idaho St.',
-    'illinois state': 'Illinois St.',
-    'indiana state': 'Indiana St.',
-    'iu indianapolis': 'IU Indy',
-    'iuc': 'Illinois Chicago',
-    'jackson state': 'Jackson St.',
-    'long beach state': 'Long Beach St.',
-    'murray state': 'Murray St.',
-    'norfolk state': 'Norfolk St.',
-    'oklahoma state': 'Oklahoma St.',
-    'pennsylvania': 'Penn',
-    'siu edwardsville': 'SIUE',
-    'southeast missouri state': 'Southeast Missouri',
-    'st. thomas-minnesota': 'St. Thomas',
-    'tennessee state': 'Tennessee St.',
-    'uconn': 'Connecticut',
-    'ul monroe': 'Louisiana Monroe',
-    'ut martin': 'Tennessee Martin',
+    "american university": "American",
+    "app state": "Appalachian St.",
+    "siu edwardsville": "SIUE",
+    "ut martin": "Tennessee Martin",
+    "long beach state": "Long Beach St.",
+    "delaware state": "Delaware St.",
+    "georgia state": "Georgia St.",
+    "idaho state": "Idaho St.",
+    "illinois state": "Illinois St.",
+    "indiana state": "Indiana St.",
+    "jackson state": "Jackson St.",
+    "murray state": "Murray St.",
+    "norfolk state": "Norfolk St.",
+    "oklahoma state": "Oklahoma St.",
+    "tennessee state": "Tennessee St.",
+    "southeast missouri state": "Southeast Missouri",
+    "cal state bakersfield": "Cal St. Bakersfield",
 }
 STOPWORDS = {"university", "college", "the", "at", "of"}
 
@@ -1100,20 +1084,16 @@ def predict_matchup(
     tempo_scale: float = 1.0,
     sos_weight: float = 0.0,
 ):
-    # Re-centered tempo: slider value is multiplied by TEMPO_BASELINE so that
-    # 1.00 represents your previous "0.93" baseline behavior.
-    effective_tempo_scale = float(tempo_scale) * float(TEMPO_BASELINE)
-
     away_row = df_kp.loc[df_kp["Team"] == team_away].iloc[0]
     home_row = df_kp.loc[df_kp["Team"] == team_home].iloc[0]
 
     OR_away = away_row["ORtg"] * off_scale
     DR_away = away_row["DRtg"] * def_scale
-    T_away = away_row["AdjT"] * effective_tempo_scale
+    T_away = away_row["AdjT"] * tempo_scale
 
     OR_home = home_row["ORtg"] * off_scale
     DR_home = home_row["DRtg"] * def_scale
-    T_home = home_row["AdjT"] * effective_tempo_scale
+    T_home = home_row["AdjT"] * tempo_scale
 
     possessions = (T_away * T_home) / AVG_TEMPO
 
@@ -1763,22 +1743,89 @@ def main():
     if "schedule_results_df" not in st.session_state:
         st.session_state["schedule_results_df"] = None
 
-    # ---------------------------------------------------------
-    # Subscriber build: lock data sourcing to repo-root files.
-    # (Removes Data source toggles + upload overrides.)
-    # ---------------------------------------------------------
+    st.sidebar.header("Data source (Repo Root)")
+
     kp_path = find_latest_local_file("kenpom_*.xls*", REPO_ROOT)
     sched_path = find_latest_local_file("Schedule_*.xls*", REPO_ROOT)
 
-    if not (kp_path and kp_path.exists()):
+    auto_kp_bytes = None
+    auto_sched_bytes = None
+
+    if kp_path and kp_path.exists():
+        auto_kp_bytes = kp_path.read_bytes()
+    if sched_path and sched_path.exists():
+        auto_sched_bytes = sched_path.read_bytes()
+
+    use_github_fallback = st.sidebar.toggle(
+        "Enable GitHub fallback (if local files missing)",
+        value=False,
+        help="Uses GitHub API to find and download the newest Excel files from the repo root."
+    )
+
+    if use_github_fallback and (auto_kp_bytes is None or auto_sched_bytes is None):
+        if not (GITHUB_OWNER and GITHUB_REPO):
+            st.sidebar.error("Set GITHUB_OWNER and GITHUB_REPO at the top of app.py to use GitHub fallback.")
+        else:
+            gh_token = None
+            try:
+                gh_token = st.secrets.get("GH_TOKEN", None)
+            except Exception:
+                gh_token = None
+
+            with st.sidebar.spinner("Checking GitHub for newest files..."):
+                try:
+                    if auto_kp_bytes is None:
+                        _, b = find_latest_github_file(
+                            owner=GITHUB_OWNER,
+                            repo=GITHUB_REPO,
+                            folder=GITHUB_DATA_DIR,
+                            pattern_regex=r"^kenpom_.*\.xls[x]?$",
+                            branch=GITHUB_BRANCH,
+                            token=gh_token,
+                        )
+                        if b:
+                            auto_kp_bytes = b
+
+                    if auto_sched_bytes is None:
+                        _, b = find_latest_github_file(
+                            owner=GITHUB_OWNER,
+                            repo=GITHUB_REPO,
+                            folder=GITHUB_DATA_DIR,
+                            pattern_regex=r"^Schedule_.*\.xls[x]?$",
+                            branch=GITHUB_BRANCH,
+                            token=gh_token,
+                        )
+                        if b:
+                            auto_sched_bytes = b
+                except Exception as e:
+                    st.sidebar.error(f"GitHub fallback failed: {e}")
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption("Auto-load is used if found. Upload overrides auto-load.")
+    kp_uploaded = st.sidebar.file_uploader(
+        "KenPom Excel (.xlsx) — optional override",
+        type=["xlsx", "xls"],
+        accept_multiple_files=False,
+        key="kp_upload",
+    )
+    sched_uploaded = st.sidebar.file_uploader(
+        "Schedule Excel (.xlsx) — optional override (schedule mode)",
+        type=["xlsx", "xls"],
+        accept_multiple_files=False,
+        key="sched_upload_override",
+    )
+
+    if kp_uploaded is not None:
+        kp_bytes = kp_uploaded.getvalue()
+    else:
+        kp_bytes = auto_kp_bytes
+
+    if kp_bytes is None:
         st.info(
-            "No KenPom file found in the repo root.\n\n"
-            "Fix: commit a file like `kenpom_*.xlsx` into the repo root (same folder as app.py)."
+            "No KenPom file found in repo root.\n\n"
+            "Fix: commit `kenpom_*.xlsx` into the repo root (same folder as app.py), or upload manually."
         )
         return
-
-    kp_bytes = kp_path.read_bytes()
-    auto_sched_bytes = sched_path.read_bytes() if (sched_path and sched_path.exists()) else None
 
     # Sidebar controls
     st.sidebar.markdown("---")
@@ -1790,17 +1837,13 @@ def main():
         0.80, 1.20, 1.00, 0.01,
         help=">1.00 makes DRtg larger (worse defense) -> increases opponent points."
     )
-    tempo_scale = st.sidebar.slider(
-        "Tempo scale (re-centered)",
-        0.80, 1.20, 1.00, 0.01,
-        help=f"Re-centered so 1.00 matches your previous baseline (old 0.93). Effective = slider × {TEMPO_BASELINE}."
-    )
+    tempo_scale = st.sidebar.slider("Tempo scale (AdjT multiplier)", 0.80, 1.20, 1.00, 0.01)
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Strength of Schedule (hardcoded columns N/P/R) — 4× impact")
     sos_weight = st.sidebar.slider(
         "SoS weight (0 = off, 1 = max effect)",
-        0.0, 1.0, float(DEFAULT_SOS_WEIGHT), 0.05,
+        0.0, 1.0, 0.20, 0.05,
         help="Applies a capped margin-only adjustment using SoS differential from KenPom columns N/P/R."
     )
 
@@ -1881,11 +1924,15 @@ def main():
     elif mode == "Run full daily schedule":
         st.markdown("## Run Full Daily Schedule")
 
-        sched_bytes = auto_sched_bytes
+        if sched_uploaded is not None:
+            sched_bytes = sched_uploaded.getvalue()
+        else:
+            sched_bytes = auto_sched_bytes
+
         if sched_bytes is None:
             st.info(
                 "No schedule file found in repo root.\n\n"
-                "Fix: commit a file like `Schedule_*.xlsx` into the repo root (same folder as app.py)."
+                "Fix: commit `Schedule_*.xlsx` into the repo root (same folder as app.py), or upload manually."
             )
             return
 
@@ -1990,5 +2037,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
