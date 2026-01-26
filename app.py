@@ -216,13 +216,13 @@ def require_login(
             pw = st.text_input("Password", type="password", placeholder="Enter subscriber password")
             submitted = st.form_submit_button("Log in")
 
-        if submitted:
-            if str(pw).strip() == str(app_password).strip():
-                st.session_state["is_authed"] = True
-                st.session_state["auth_error"] = ""
-                st.rerun()
-            else:
-                st.session_state["auth_error"] = "Invalid password. Please try again."
+            if submitted:
+                if str(pw).strip() == str(app_password).strip():
+                    st.session_state["is_authed"] = True
+                    st.session_state["auth_error"] = ""
+                    st.rerun()
+                else:
+                    st.session_state["auth_error"] = "Invalid password. Please try again."
 
         err = st.session_state.get("auth_error", "")
         if err:
